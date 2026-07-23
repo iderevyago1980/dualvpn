@@ -133,6 +133,10 @@ func NewClient(cfg ClientConfig) *Client {
 		insecureSkipVerify: cfg.InsecureSkipVerify,
 		mode:               mode,
 		twoFAOK:            make(chan struct{}, 1),
+		// Канал событий создаётся сразу: Manager.Start вызывает Events()
+		// из отдельной горутины одновременно с Connect() — ленивая
+		// инициализация в обоих местах давала гонку.
+		events: make(chan Event, 16),
 	}
 }
 
@@ -404,11 +408,9 @@ func (c *Client) tplPost(typ int, path string, dtd *proto.DTD) error {
 	return fmt.Errorf("auth error %s", resp.Status)
 }
 
-// Events возвращает канал событий туннеля.
+// Events возвращает канал событий туннеля. Канал создаётся в NewClient,
+// поэтому вызов безопасен из любой горутины.
 func (c *Client) Events() <-chan Event {
-	if c.events == nil {
-		c.events = make(chan Event, 16)
-	}
 	return c.events
 }
 
@@ -486,9 +488,6 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.running = true
 	c.mu.Unlock()
 
-	if c.events == nil {
-		c.events = make(chan Event, 16)
-	}
 	if c.twoFAOK == nil {
 		c.twoFAOK = make(chan struct{}, 1)
 	}
@@ -499,15 +498,17 @@ func (c *Client) Connect(ctx context.Context) error {
 
 // Disconnect останавливает туннель.
 func (c *Client) Disconnect() error {
+	// Снимаем нужное под мьютексом и сразу отпускаем: Close() берёт c.mu
+	// сам, а sync.Mutex не реентрантный — держать его здесь нельзя.
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.running = false
+	tunnel := c.tunnel
+	c.mu.Unlock()
 
-	if c.tunnel != nil {
-		_ = c.tunnel.Close()
+	if tunnel != nil {
+		_ = tunnel.Close()
 	}
-	_ = c.Close()
-	return nil
+	return c.Close()
 }
 
 // Connected возвращает true если туннель активен.
