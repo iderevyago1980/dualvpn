@@ -7,16 +7,18 @@ require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/elastic/go-sysinfo v1.13.1
 	github.com/getlantern/systray v1.2.2
+	github.com/pion/dtls/v2 v2.2.8-0.20240201071732-2597464081c8
 	github.com/wailsapp/wails/v2 v2.13.0
+	go.uber.org/atomic v1.11.0
 	golang.org/x/sys v0.44.0
 )
 
 require (
 	github.com/elastic/go-windows v1.0.0 // indirect
 	github.com/joeshaw/multierror v0.0.0-20140124173710-69b34d4ec901 // indirect
-	github.com/pion/dtls/v2 v2.2.8-0.20240201071732-2597464081c8 // indirect
+	github.com/pion/logging v0.2.2 // indirect
+	github.com/pion/transport/v3 v3.0.1 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 )
 
