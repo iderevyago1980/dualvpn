@@ -1,18 +1,22 @@
 package vpn
 
-import "testing"
+import (
+	"testing"
+
+	"dualvpn/internal/vpn/sslcon"
+)
 
 // testTunnelConfig — конфигурация тестового туннеля с указанным ID.
 func testTunnelConfig(id, server, mode string) TunnelConfig {
 	return TunnelConfig{
 		ID: id,
-		Opts: Options{
-			Server:   server,
+		Opts: sslcon.ClientConfig{
+			Host:     server,
 			Username: "user",
 			Password: "pass",
-			Mode:     mode,
 		},
 		Routes: []string{"192.168.1.0/24"},
+		Mode:   mode,
 	}
 }
 

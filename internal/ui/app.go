@@ -17,6 +17,7 @@ import (
 	"dualvpn/internal/config"
 	"dualvpn/internal/mode"
 	"dualvpn/internal/vpn"
+	"dualvpn/internal/vpn/sslcon"
 )
 
 // LogEntry — одна запись журнала приложения; отдаётся фронтенду как есть.
@@ -299,15 +300,14 @@ func (a *App) registerTunnels() {
 	for _, t := range tunnels {
 		cfgs = append(cfgs, vpn.TunnelConfig{
 			ID: t.Name,
-			Opts: vpn.Options{
-				Server:    t.Endpoint,
-				Group:     t.Group,
-				Username:  t.Username,
-				Password:  t.Password,
-				Mode:      m,
-				SocksPort: t.SocksPort,
+			Opts: sslcon.ClientConfig{
+				Host:     t.Endpoint,
+				Group:    t.Group,
+				Username: t.Username,
+				Password: t.Password,
 			},
 			Routes: t.Routes,
+			Mode:   m,
 		})
 	}
 	a.manager.ReplaceTunnels(cfgs)
@@ -319,20 +319,20 @@ func (a *App) forwardEvents() {
 	for ev := range a.manager.Events() {
 		level := "info"
 		switch ev.Event.Type {
-		case vpn.EventConnected:
+		case sslcon.EventConnected:
 			level = "ok"
-		case vpn.EventDisconnected, vpn.Event2FARequired:
+		case sslcon.EventDisconnected, sslcon.Event2FARequired:
 			level = "warn"
-		case vpn.EventError:
+		case sslcon.EventError:
 			level = "err"
 		}
 		a.log(level, fmt.Sprintf("[%s] %s: %s", ev.TunnelID, ev.Event.Type, ev.Event.Message))
 
 		// Отражаем смену состояния туннеля в меню трея.
 		switch ev.Event.Type {
-		case vpn.EventConnected:
+		case sslcon.EventConnected:
 			a.trayStatus(ev.TunnelID, true)
-		case vpn.EventDisconnected, vpn.EventError:
+		case sslcon.EventDisconnected, sslcon.EventError:
 			a.trayStatus(ev.TunnelID, false)
 		}
 
@@ -342,7 +342,7 @@ func (a *App) forwardEvents() {
 				Type:     string(ev.Event.Type),
 				Message:  ev.Event.Message,
 			})
-			if ev.Event.Type == vpn.Event2FARequired {
+			if ev.Event.Type == sslcon.Event2FARequired {
 				runtime.EventsEmit(ctx, "tunnel:2fa", ev.TunnelID)
 			}
 		}

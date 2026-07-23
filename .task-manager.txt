@@ -1,0 +1,62 @@
+Задача: Интеграция sslcon в manager.go — замена openconnect-subprocess.
+
+ПРОЕКТ: DualVPN (Go). См. .hermes/plans/2026-07-23_185500-dualvpn-sslcon-integration.md.
+
+КОНТЕКСТ:
+- Task 1: internal/vpn/sslcon/auth.go — Client с per-tunnel auth (InitAuth, PasswordAuth, Close)
+- Task 3: internal/vpn/sslcon/tunnel.go — Tunnel с per-tunnel packet flow (SetupTunnel, ReadPacket, WritePacket, PacketFlow, SetupTUN, Close)
+- Существующий: internal/vpn/manager.go — manager для openconnect-subprocess
+- Существующий: internal/vpn/openconnect.go — openconnect subprocess wrapper (подлежит замене)
+
+ЗАДАЧИ:
+
+1. Создай internal/vpn/sslcon/client.go — high-level клиент, объединяющий auth + tunnel:
+   - type Client struct { auth *Client; tunnel *Tunnel; mode string; events chan Event }
+   - type Event struct { Type string; Message string; Data interface{} } — типы: connected, disconnected, error, 2fa_required
+   - func NewClient(cfg ClientConfig) *Client
+   - func (c *Client) Connect() error — InitAuth + PasswordAuth + SetupTunnel
+   - func (c *Client) Disconnect() error
+   - func (c *Client) Events() <-chan Event
+   - func (c *Client) Submit2FA(code string) — передать 2FA код
+   - func (c *Client) Connected() bool
+   - func (c *Client) Mode() string — "tun" или "socks5"
+   - Для 2FA: если SecretKey задан — автогенерация TOTP; иначе событие 2fa_required и ждать Submit2FA
+
+2. Обнови internal/vpn/manager.go — замени openconnect.Client на sslcon.Client:
+   - type TunnelConfig struct { ID string; Opts sslcon.ClientConfig; Routes []string; Mode string }
+   - Manager создаёт sslcon.NewClient(opts) вместо openconnect.NewClient(opts)
+   - События: sslcon.Client.Events() → ManagerEvent
+   - 2FA: manager.Submit2FA(id, code) → client.Submit2FA(code)
+   - Статус: manager.Status(id) → client.Connected() + client.Mode()
+   - Start: client.Connect() в горутине, чтение Events
+   - Stop: client.Disconnect()
+
+3. Обнови internal/vpn/manager_test.go:
+   - TestManagerAddTunnel — добавление туннеля с sslcon.ClientConfig
+   - TestManagerSubmit2FA — передача 2FA кода
+   - TestManagerStatus — статус до/после подключения
+   - TestManagerTwoTunnels — два туннеля одновременно (независимость)
+
+4. Обнови internal/ui/app.go — используй sslcon.ClientConfig вместо openconnect.Options:
+   - GetTunnels() → []config.Tunnel → []sslcon.ClientConfig
+   - ConnectTunnel(id) → manager.Start(ctx, id)
+   - Submit2FA(tunnelID, code) → manager.Submit2FA(id, code)
+   - GetTunnelStatus(id) → manager.Status(id)
+
+5. Обнови go.mod — убери зависимость от openconnect (если есть), добавь sslcon:
+   - go mod edit -replace sslcon=github.com/tlslink/sslcon@164ea92d
+   - go get sslcon
+   - go mod tidy
+
+6. Убедись: go build ./... && go vet ./... && go test ./internal/... -v
+
+7. git -c user.name='Hermes Agent' -c user.email='agent@hermes.local' commit -am 'feat: sslcon integration in manager — native Go client replaces openconnect'
+
+ВАЖНО:
+- openconnect.go можно оставить как fallback (если sslcon не работает с конкретным сервером), но manager должен использовать sslcon по умолчанию
+- 2FA: sslcon поддерживает TOTP через SecretKey (автогенерация) или интерактивный ввод — маппинг на наши события
+- Комментарии на русском
+- Тесты должны проходить
+- go 1.24
+
+PROMPT
