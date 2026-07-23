@@ -6,6 +6,7 @@ package sslcon
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/xml"
 	"errors"
@@ -59,6 +60,29 @@ type Client struct {
 
 	insecureSkipVerify bool
 	mu                 sync.Mutex
+
+	// Поля для high-level API (совместимость с openconnect.Client).
+	events chan Event
+	twoFA  chan string
+	tunnel *Tunnel
+	running bool
+}
+
+// EventType — тип события жизненного цикла туннеля.
+// Совместим с vpn.EventType из openconnect-обёртки.
+type EventType string
+
+const (
+	EventConnected    EventType = "connected"
+	EventDisconnected EventType = "disconnected"
+	EventError        EventType = "error"
+	Event2FARequired  EventType = "2fa_required"
+)
+
+// Event — событие от sslcon-клиента.
+type Event struct {
+	Type    EventType
+	Message string
 }
 
 // Типы XML-шаблонов (как в sslcon/auth).
@@ -268,6 +292,135 @@ func (c *Client) tplPost(typ int, path string, dtd *proto.DTD) error {
 	}
 	c.Conn.Close()
 	return fmt.Errorf("auth error %s", resp.Status)
+}
+
+// Events возвращает канал событий туннеля.
+func (c *Client) Events() <-chan Event {
+	if c.events == nil {
+		c.events = make(chan Event, 16)
+	}
+	return c.events
+}
+
+// Submit2FA передаёт 2FA-код (TOTP), запрошенный сервером.
+func (c *Client) Submit2FA(code string) {
+	if c.twoFA == nil {
+		c.twoFA = make(chan string, 1)
+	}
+	select {
+	case c.twoFA <- code:
+	default:
+	}
+}
+
+// Needs2FA возвращает true если сервер запросил 2FA (по ошибке PasswordAuth).
+func (c *Client) Needs2FA() bool {
+	return false // TODO: детектировать по ответу сервера
+}
+
+// Connect выполняет полный цикл: auth → tunnel → packet flow.
+// Не блокирует: статус приходит через Events().
+func (c *Client) Connect(ctx context.Context) error {
+	c.mu.Lock()
+	if c.running {
+		c.mu.Unlock()
+		return fmt.Errorf("туннель %s уже запущен", c.Prof.Host)
+	}
+	c.running = true
+	c.mu.Unlock()
+
+	if c.events == nil {
+		c.events = make(chan Event, 16)
+	}
+	if c.twoFA == nil {
+		c.twoFA = make(chan string, 1)
+	}
+
+	go c.run(ctx)
+	return nil
+}
+
+// Disconnect останавливает туннель.
+func (c *Client) Disconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.running = false
+
+	if c.tunnel != nil {
+		_ = c.tunnel.Close()
+	}
+	_ = c.Close()
+	return nil
+}
+
+// Connected возвращает true если туннель активен.
+func (c *Client) Connected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tunnel != nil && c.running
+}
+
+// Mode возвращает режим туннеля.
+func (c *Client) Mode() string {
+	// TODO: хранить режим в Client
+	return "tun"
+}
+
+// run — главный цикл подключения.
+func (c *Client) run(ctx context.Context) {
+	defer func() {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		if c.events != nil {
+			close(c.events)
+		}
+	}()
+
+	c.emit(EventConnected, "Инициализация TLS...")
+	if err := c.InitAuth(); err != nil {
+		c.emit(EventError, fmt.Sprintf("InitAuth: %v", err))
+		return
+	}
+
+	c.emit(EventConnected, "Аутентификация...")
+	if err := c.PasswordAuth(); err != nil {
+		c.emit(EventError, fmt.Sprintf("PasswordAuth: %v", err))
+		return
+	}
+
+	c.emit(EventConnected, "Аутентификация успешна, установка туннеля...")
+
+	tunnel, err := c.SetupTunnel("tun")
+	if err != nil {
+		c.emit(EventError, fmt.Sprintf("SetupTunnel: %v", err))
+		return
+	}
+	c.tunnel = tunnel
+
+	if err := tunnel.SetupTUN(""); err != nil {
+		c.emit(EventError, fmt.Sprintf("SetupTUN: %v", err))
+		return
+	}
+	c.emit(EventConnected, "TUN туннель установлен")
+
+	select {
+	case <-ctx.Done():
+		c.emit(EventDisconnected, "Подключение отменено пользователем")
+	case <-tunnel.Done():
+		c.emit(EventDisconnected, "Туннель закрыт сервером")
+	}
+}
+
+// emit кладёт событие в канал, не блокируясь.
+func (c *Client) emit(t EventType, msg string) {
+	if c.events == nil {
+		return
+	}
+	select {
+	case c.events <- Event{Type: t, Message: msg}:
+	default:
+	}
 }
 
 const templateInit = `<?xml version="1.0" encoding="UTF-8"?>

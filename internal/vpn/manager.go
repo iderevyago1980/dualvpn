@@ -4,26 +4,29 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"dualvpn/internal/vpn/sslcon"
 )
 
 // TunnelConfig — конфигурация одного туннеля под управлением менеджера.
 type TunnelConfig struct {
-	ID     string   // Уникальный идентификатор туннеля (например, "vpn1", "vpn2")
-	Opts   Options  // Параметры openconnect
-	Routes []string // Подсети (CIDR), маршрутизируемые через этот туннель в TUN-режиме
+	ID     string              // Уникальный идентификатор туннеля (например, "vpn1", "vpn2")
+	Opts   sslcon.ClientConfig // Параметры sslcon (нативный Go-клиент)
+	Routes []string            // Подсети (CIDR), маршрутизируемые через этот туннель в TUN-режиме
+	Mode   string              // "tun" или "socks5"
 }
 
 // ManagerEvent — событие туннеля с указанием его идентификатора.
 type ManagerEvent struct {
 	TunnelID string
-	Event    Event
+	Event    sslcon.Event
 }
 
 // tunnelState — текущее состояние одного туннеля внутри менеджера.
 type tunnelState struct {
 	cfg       TunnelConfig
-	client    *Client
-	events    chan Event // Канал событий текущего клиента (nil до запуска)
+	client    *sslcon.Client
+	events    chan sslcon.Event // Канал событий текущего клиента (nil до запуска)
 	connected bool
 }
 
@@ -83,12 +86,18 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("туннель %q уже запущен", id)
 	}
-	client := New(st.cfg.Opts)
+	client := sslcon.NewClient(st.cfg.Opts)
 	st.client = client
-	st.events = client.events // канал событий клиента; читается в forwardEvents
+	st.events = make(chan sslcon.Event, 16) // буфер для событий клиента
+	go func() { // копируем события из клиента в наш канал
+		for ev := range client.Events() {
+			st.events <- ev
+		}
+		close(st.events)
+	}()
 	m.mu.Unlock()
 
-	if err := client.Start(ctx); err != nil {
+	if err := client.Connect(ctx); err != nil {
 		m.mu.Lock()
 		st.client = nil
 		st.events = nil
@@ -112,7 +121,7 @@ func (m *Manager) StartAll(ctx context.Context) {
 
 	for _, id := range ids {
 		if err := m.Start(ctx, id); err != nil {
-			m.emit(id, Event{Type: EventError, Message: err.Error()})
+			m.emit(id, sslcon.Event{Type: sslcon.EventError, Message: err.Error()})
 		}
 	}
 }
@@ -131,7 +140,7 @@ func (m *Manager) Stop(id string) error {
 	if client == nil {
 		return nil // не запущен — нечего останавливать
 	}
-	return client.Stop()
+	return client.Disconnect()
 }
 
 // StopAll останавливает все запущенные туннели.
@@ -175,19 +184,19 @@ func (m *Manager) Status(id string) (connected bool, mode string) {
 	if !ok {
 		return false, ""
 	}
-	return st.connected, st.cfg.Opts.Mode
+	return st.connected, st.cfg.Mode
 }
 
 // forwardEvents читает события клиента до закрытия его канала,
 // обновляет состояние туннеля и пересылает события в общий канал.
-func (m *Manager) forwardEvents(id string, client *Client) {
+func (m *Manager) forwardEvents(id string, client *sslcon.Client) {
 	for ev := range client.Events() {
 		m.mu.Lock()
 		if st, ok := m.tunnels[id]; ok {
 			switch ev.Type {
-			case EventConnected:
+			case sslcon.EventConnected:
 				st.connected = true
-			case EventDisconnected, EventError:
+			case sslcon.EventDisconnected, sslcon.EventError:
 				st.connected = false
 			}
 		}
@@ -205,7 +214,7 @@ func (m *Manager) forwardEvents(id string, client *Client) {
 }
 
 // emit кладёт событие в агрегированный канал, не блокируясь при переполнении.
-func (m *Manager) emit(id string, ev Event) {
+func (m *Manager) emit(id string, ev sslcon.Event) {
 	select {
 	case m.events <- ManagerEvent{TunnelID: id, Event: ev}:
 	default: // потребитель отстал — событие статуса можно потерять
