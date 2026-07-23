@@ -51,6 +51,19 @@ func (m *Manager) AddTunnel(cfg TunnelConfig) {
 	m.tunnels[cfg.ID] = &tunnelState{cfg: cfg}
 }
 
+// ReplaceTunnels останавливает все туннели и заменяет их набор новым.
+// Канал событий сохраняется: события остановки дойдут до подписчика,
+// а туннели, исчезнувшие из нового набора, будут удалены из менеджера.
+func (m *Manager) ReplaceTunnels(cfgs []TunnelConfig) {
+	m.StopAll()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tunnels = make(map[string]*tunnelState, len(cfgs))
+	for _, c := range cfgs {
+		m.tunnels[c.ID] = &tunnelState{cfg: c}
+	}
+}
+
 // Events возвращает агрегированный канал событий всех туннелей.
 func (m *Manager) Events() <-chan ManagerEvent {
 	return m.events
