@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DualVPN — Sidebar</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1117; color: #e5e7eb; height: 100vh; overflow: hidden;
+    font-size: 14px; -webkit-font-smoothing: antialiased;
+  }
+  .app { display: grid; grid-template-columns: 240px 1fr; grid-template-rows: 56px 1fr 28px; height: 100vh; }
+  
+  /* Header */
+  .header { grid-column: 1 / -1; display: flex; align-items: center; padding: 0 20px; background: #161922; border-bottom: 1px solid #25282f; gap: 16px; }
+  .logo { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; color: #818cf8; }
+  .logo-icon { width: 28px; height: 28px; background: #818cf8; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #0f1117; font-size: 16px; }
+  .mode-pill { font-size: 11px; padding: 4px 10px; border-radius: 20px; font-weight: 600; background: #1e3a5f; color: #93c5fd; }
+  .spacer { flex: 1; }
+  .btn { padding: 7px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; transition: all 0.15s; font-weight: 500; }
+  .btn-ghost { background: transparent; color: #9ca3af; }
+  .btn-ghost:hover { background: #1f2330; color: #e5e7eb; }
+  .btn-primary { background: #6366f1; color: white; }
+  .btn-primary:hover { background: #4f46e5; }
+  
+  /* Sidebar */
+  .sidebar { background: #131620; border-right: 1px solid #25282f; padding: 12px; overflow-y: auto; }
+  .sidebar-section { margin-bottom: 16px; }
+  .sidebar-title { font-size: 10px; text-transform: uppercase; color: #6b7280; margin-bottom: 6px; padding: 0 8px; font-weight: 600; letter-spacing: 0.5px; }
+  .tunnel-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; transition: all 0.15s; display: flex; flex-direction: column; gap: 2px; }
+  .tunnel-item:hover { background: #1c2030; }
+  .tunnel-item.active { background: #6366f120; border-left: 3px solid #6366f1; padding-left: 9px; }
+  .tunnel-row { display: flex; align-items: center; gap: 8px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot-on { background: #22c55e; box-shadow: 0 0 6px #22c55e60; }
+  .dot-off { background: #4b5563; }
+  .dot-connecting { background: #f59e0b; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% {opacity:1} 50% {opacity:0.3} }
+  .tunnel-label { font-size: 13px; font-weight: 600; }
+  .tunnel-meta { font-size: 11px; color: #6b7280; padding-left: 16px; font-family: monospace; }
+  .sidebar-add { padding: 8px 12px; border-radius: 6px; cursor: pointer; color: #6366f1; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .sidebar-add:hover { background: #1c2030; }
+  
+  /* Main content */
+  .content { overflow-y: auto; padding: 24px 32px; }
+  .content-header { margin-bottom: 24px; }
+  .content-header h1 { font-size: 22px; margin-bottom: 4px; }
+  .content-header p { color: #6b7280; font-size: 13px; }
+  
+  /* Cards */
+  .card { background: #161922; border: 1px solid #25282f; border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  .card-header { padding: 16px 20px; border-bottom: 1px solid #25282f; display: flex; align-items: center; justify-content: space-between; }
+  .card-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .card-body { padding: 16px 20px; }
+  
+  /* Form */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-field { display: flex; flex-direction: column; gap: 4px; }
+  .form-field label { font-size: 12px; color: #9ca3af; font-weight: 500; }
+  .form-field input, .form-field select { background: #0f1117; border: 1px solid #25282f; color: #e5e7eb; padding: 8px 12px; border-radius: 6px; font-size: 13px; outline: none; transition: border-color 0.15s; }
+  .form-field input:focus, .form-field select:focus { border-color: #6366f1; }
+  .form-field-full { grid-column: 1 / -1; }
+  .password-wrapper { position: relative; }
+  .password-wrapper input { width: 100%; padding-right: 36px; }
+  .password-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; color: #6b7280; font-size: 14px; }
+  
+  /* Routes */
+  .routes-list { display: flex; flex-direction: column; gap: 6px; }
+  .route-chip { display: inline-flex; align-items: center; gap: 8px; background: #1c2030; border: 1px solid #2d3340; border-radius: 6px; padding: 6px 12px; font-family: monospace; font-size: 12px; }
+  .route-chip .del { color: #ef4444; cursor: pointer; font-size: 14px; }
+  .route-add-btn { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px dashed #3f4452; border-radius: 6px; padding: 6px 12px; cursor: pointer; color: #818cf8; font-size: 12px; }
+  .route-add-btn:hover { border-color: #818cf8; }
+  
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat-box { background: #0f1117; border: 1px solid #25282f; border-radius: 8px; padding: 12px 16px; }
+  .stat-box .label { font-size: 10px; text-transform: uppercase; color: #6b7280; margin-bottom: 4px; }
+  .stat-box .value { font-size: 18px; font-family: monospace; font-weight: 700; }
+  .stat-box.rx .value { color: #22c55e; }
+  .stat-box.tx .value { color: #818cf8; }
+  .stat-box.time .value { color: #f59e0b; }
+  .stat-box.mode .value { color: #ec4899; font-size: 14px; }
+  
+  /* Log */
+  .log-box { background: #0f1117; border: 1px solid #25282f; border-radius: 8px; padding: 12px; height: 160px; overflow-y: auto; font-family: monospace; font-size: 11px; }
+  .log-line { color: #6b7280; margin-bottom: 2px; }
+  .log-line .ts { color: #4b5563; }
+  .log-line .info { color: #93c5fd; }
+  .log-line .ok { color: #22c55e; }
+  .log-line .warn { color: #f59e0b; }
+  .log-line .err { color: #ef4444; }
+  
+  /* Action buttons */
+  .action-bar { display: flex; gap: 8px; }
+  .btn-connect { padding: 10px 24px; font-size: 14px; font-weight: 700; border-radius: 6px; border: none; cursor: pointer; }
+  .btn-connect.on { background: #dc2626; color: white; }
+  .btn-connect.on:hover { background: #b91c1c; }
+  .btn-connect.off { background: #22c55e; color: white; }
+  .btn-connect.off:hover { background: #16a34a; }
+  
+  /* Footer */
+  .footer { grid-column: 1 / -1; display: flex; align-items: center; padding: 0 20px; background: #131620; border-top: 1px solid #25282f; font-size: 11px; color: #4b5563; gap: 16px; }
+  
+  /* Modal for 2FA */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal { background: #161922; border: 1px solid #25282f; border-radius: 12px; padding: 24px; width: 360px; }
+  .modal h2 { font-size: 18px; margin-bottom: 8px; }
+  .modal p { color: #9ca3af; font-size: 13px; margin-bottom: 16px; }
+  .modal input { width: 100%; text-align: center; font-size: 24px; letter-spacing: 8px; padding: 12px; background: #0f1117; border: 1px solid #25282f; color: #e5e7eb; border-radius: 8px; font-family: monospace; }
+  .modal .btn-row { display: flex; gap: 8px; margin-top: 16px; }
+  .modal .btn-row button { flex: 1; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <div class="header">
+    <div class="logo"><div class="logo-icon">⬡</div> DualVPN</div>
+    <span class="mode-pill" id="modePill">TUN · Admin</span>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost" onclick="switchMode()">↻ Сменить режим</button>
+    <button class="btn btn-primary" onclick="connectAll()">Подключить все</button>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">Туннели</div>
+      <div class="tunnel-item active" onclick="selectTunnel(1, this)">
+        <div class="tunnel-row">
+          <span class="status-dot dot-off" id="dot1"></span>
+          <span class="tunnel-label">AstraLinux</span>
+        </div>
+        <div class="tunnel-meta">vpn2.astralinux.ru</div>
+      </div>
+      <div class="tunnel-item" onclick="selectTunnel(2, this)">
+        <div class="tunnel-row">
+          <span class="status-dot dot-off" id="dot2"></span>
+          <span class="tunnel-label">MT-Integration</span>
+        </div>
+        <div class="tunnel-meta">vpn.mt-integration.ru</div>
+      </div>
+      <div class="sidebar-add" onclick="addTunnel()">+ Добавить туннель</div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Глобальные</div>
+      <div class="tunnel-item" onclick="selectSettings(this)">
+        <div class="tunnel-row"><span style="font-size:14px">⚙</span><span class="tunnel-label">Настройки</span></div>
+      </div>
+      <div class="tunnel-item" onclick="selectSettings(this)">
+        <div class="tunnel-row"><span style="font-size:14px">📊</span><span class="tunnel-label">Статистика</span></div>
+      </div>
+      <div class="tunnel-item" onclick="selectSettings(this)">
+        <div class="tunnel-row"><span style="font-size:14px">📄</span><span class="tunnel-label">Логи</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content" id="content">
+    <div class="content-header">
+      <h1 id="tunnelTitle">AstraLinux</h1>
+      <p id="tunnelSubtitle">vpn2.astralinux.ru · AnyConnect (SSL/TLS) · Group: Astra2FA</p>
+    </div>
+
+    <!-- Connection form -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🔐 Параметры подключения</span>
+        <div class="action-bar">
+          <button class="btn-connect off" id="connectBtn1" onclick="toggleTunnel(1)">▶ Подключить</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>VPN сервер</label>
+            <input type="text" value="vpn2.astralinux.ru">
+          </div>
+          <div class="form-field">
+            <label>Группа (tunnel group)</label>
+            <select id="groupSelect1">
+              <option value="Basic 2FA" selected>Astra2FA</option>
+              <option value="Astra2FA Partners">Astra2FA Partners</option>
+              <option value="Basic">AstraLinux</option>
+              <option value="Partners Astralinux">Partners</option>
+              <option value="AstraLinuxExt">Sevastopol</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Логин</label>
+            <input type="text" value="derevyago.i">
+          </div>
+          <div class="form-field">
+            <label>Пароль</label>
+            <div class="password-wrapper">
+              <input type="password" id="pass1" value="secret123">
+              <span class="password-toggle" onclick="togglePass('pass1', this)">👁</span>
+            </div>
+          </div>
+          <div class="form-field">
+            <label>SOCKS5 порт (no-admin)</label>
+            <input type="number" value="1080">
+          </div>
+          <div class="form-field">
+            <label>TUN имя (admin)</label>
+            <input type="text" value="astravpn">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Routes -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🛣 Маршруты (split-tunneling)</span>
+      </div>
+      <div class="card-body">
+        <div class="routes-list" id="routesList1">
+          <div class="route-chip"><span>192.168.10.0/24</span><span class="del" onclick="this.parentNode.remove()">✕</span></div>
+          <div class="route-chip"><span>10.10.0.0/16</span><span class="del" onclick="this.parentNode.remove()">✕</span></div>
+          <div class="route-add-btn" onclick="addRouteChip(this)">+ добавить</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📊 Статистика</span>
+      </div>
+      <div class="card-body">
+        <div class="stats-grid">
+          <div class="stat-box rx">
+            <div class="label">↓ Получено</div>
+            <div class="value" id="rx1">0 B</div>
+          </div>
+          <div class="stat-box tx">
+            <div class="label">↑ Отправлено</div>
+            <div class="value" id="tx1">0 B</div>
+          </div>
+          <div class="stat-box time">
+            <div class="label">⏱ Время</div>
+            <div class="value" id="time1">00:00</div>
+          </div>
+          <div class="stat-box mode">
+            <div class="label">Режим</div>
+            <div class="value" id="mode1">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📋 Журнал</span>
+      </div>
+      <div class="card-body">
+        <div class="log-box" id="logBox">
+          <div class="log-line"><span class="ts">11:53:28</span> <span class="info">[INFO]</span> DualVPN v0.1.0 запущен</div>
+          <div class="log-line"><span class="ts">11:53:28</span> <span class="info">[INFO]</span> Режим: TUN (admin обнаружен)</div>
+          <div class="log-line"><span class="ts">11:53:28</span> <span class="info">[INFO]</span> Загружен config.toml: 2 туннеля</div>
+          <div class="log-line"><span class="ts">11:53:28</span> <span class="warn">[WARN]</span> wintun.dll загружена, ожидание подключения</div>
+          <div class="log-line"><span class="ts">11:53:28</span> <span class="info">[INFO]</span> Туннель "AstraLinux" — ожидание</div>
+          <div class="log-line"><span class="ts">11:53:28</span> <span class="info">[INFO]</span> Туннель "MT-Integration" — ожидание</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span>v0.1.0</span>
+    <span>·</span>
+    <span>Config: ~/.dualvpn/config.toml</span>
+    <span>·</span>
+    <span>Log: ~/.dualvpn/dualvpn.log</span>
+    <span style="flex:1"></span>
+    <span id="footerStatus">Готово</span>
+  </div>
+</div>
+
+<script>
+let state = { 1: { on: false, t: 0 }, 2: { on: false, t: 0 } };
+let intervals = {};
+let activeTunnel = 1;
+
+function selectTunnel(id, el) {
+  activeTunnel = id;
+  document.querySelectorAll('.tunnel-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  const names = { 1: 'AstraLinux', 2: 'MT-Integration' };
+  const endpoints = { 1: 'vpn2.astralinux.ru', 2: 'vpn.mt-integration.ru' };
+  const groups = { 1: 'Astra2FA', 2: 'MT Remote Access' };
+  document.getElementById('tunnelTitle').textContent = names[id];
+  document.getElementById('tunnelSubtitle').textContent = `${endpoints[id]} · AnyConnect (SSL/TLS) · Group: ${groups[id]}`;
+  // Update connect button
+  const btn = document.getElementById('connectBtn1');
+  btn.dataset.tunnel = id;
+  if (state[id].on) {
+    btn.textContent = '⏹ Отключить'; btn.className = 'btn-connect on';
+  } else {
+    btn.textContent = '▶ Подключить'; btn.className = 'btn-connect off';
+  }
+}
+
+function toggleTunnel(id) {
+  id = activeTunnel;
+  state[id].on = !state[id].on;
+  const dot = document.getElementById('dot' + id);
+  const btn = document.getElementById('connectBtn1');
+  if (state[id].on) {
+    dot.className = 'status-dot dot-connecting';
+    btn.textContent = '⏹ Отключить';
+    btn.className = 'btn-connect on';
+    state[id].t = 0;
+    intervals[id] = setInterval(() => {
+      state[id].t++;
+      const m = String(Math.floor(state[id].t/60)).padStart(2,'0');
+      const s = String(state[id].t%60).padStart(2,'0');
+      document.getElementById('time'+id).textContent = `${m}:${s}`;
+      document.getElementById('rx'+id).textContent = fmt(Math.random()*150000);
+      document.getElementById('tx'+id).textContent = fmt(Math.random()*80000);
+    }, 1000);
+    addLog('Подключение к туннелю #' + id + '...', 'info');
+    setTimeout(() => {
+      dot.className = 'status-dot dot-on';
+      document.getElementById('mode'+id).textContent = 'TUN';
+      addLog('Туннель #' + id + ' подключён (TUN)', 'ok');
+    }, 2000);
+  } else {
+    dot.className = 'status-dot dot-off';
+    btn.textContent = '▶ Подключить';
+    btn.className = 'btn-connect off';
+    clearInterval(intervals[id]);
+    document.getElementById('mode'+id).textContent = '—';
+    addLog('Туннель #' + id + ' отключён', 'warn');
+  }
+}
+
+function connectAll() {
+  [1,2].forEach((id, i) => {
+    if (!state[id].on) setTimeout(() => { activeTunnel = id; toggleTunnel(id); }, i * 800);
+  });
+}
+
+function switchMode() {
+  const pill = document.getElementById('modePill');
+  if (pill.textContent.includes('TUN')) {
+    pill.textContent = 'SOCKS5 · No-Admin';
+    pill.style.background = '#3f2e1e';
+    pill.style.color = '#fbbf24';
+    addLog('Переключение в SOCKS5-режим (без админа)', 'warn');
+  } else {
+    pill.textContent = 'TUN · Admin';
+    pill.style.background = '#1e3a5f';
+    pill.style.color = '#93c5fd';
+    addLog('Переключение в TUN-режим (с админ-правами)', 'info');
+  }
+}
+
+function addLog(msg, level) {
+  const box = document.getElementById('logBox');
+  const now = new Date();
+  const ts = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="ts">${ts}</span> <span class="${level}">[${level.toUpperCase()}]</span> ${msg}`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function addRouteChip(el) {
+  const chip = document.createElement('div');
+  chip.className = 'route-chip';
+  chip.innerHTML = '<span>10.0.0.0/24</span><span class="del" onclick="this.parentNode.remove()">✕</span>';
+  el.parentNode.insertBefore(chip, el);
+}
+function togglePass(id, el) {
+  const inp = document.getElementById(id);
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  el.textContent = inp.type === 'password' ? '👁' : '🙈';
+}
+function fmt(b) { b = Math.floor(b); if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+function addTunnel() { addLog('Добавление нового туннеля (демо)', 'info'); }
+function selectSettings(el) { addLog('Открытие настроек (демо)', 'info'); }
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# DualVPN — пример конфигурации.
+# Скопируйте в config.toml и заполните username/password (или оставьте пустыми
+# для интерактивного ввода).
+
+[mode]
+# auto — определить по наличию админ-прав (admin → tun, иначе socks5)
+preferred = "auto"  # auto | tun | socks5
+
+[[tunnels]]
+name = "AstraLinux"
+endpoint = "vpn2.astralinux.ru"
+group = "Basic 2FA"          # Basic 2FA | Astra2FA Partners | Basic | Partners Astralinux | AstraLinuxExt
+socks_port = 1080
+tun_name = "astravpn"
+routes = ["192.168.10.0/24", "10.10.0.0/16"]
+username = ""
+password = ""
+
+[[tunnels]]
+name = "MT-Integration"
+endpoint = "vpn.mt-integration.ru"
+group = "MT-I_RA"            # MT-I_RA | MT-I_RA_MFA | MT-I_RA_no_split
+socks_port = 1081
+tun_name = "mtvpn"
+routes = ["192.168.20.0/24", "10.20.0.0/16"]
+username = ""
+password = ""
