@@ -28,8 +28,7 @@ type ManagerEvent struct {
 type tunnelState struct {
 	cfg       TunnelConfig
 	client    *sslcon.Client
-	events    chan sslcon.Event // Канал событий текущего клиента (nil до запуска)
-	bridge    *socks5.Bridge    // SOCKS5-мост поверх gVisor netstack (режим socks5)
+	bridge    *socks5.Bridge // SOCKS5-мост поверх gVisor netstack (режим socks5)
 	connected bool
 }
 
@@ -125,19 +124,11 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		}
 	}
 	st.client = client
-	st.events = make(chan sslcon.Event, 16) // буфер для событий клиента
-	go func() { // копируем события из клиента в наш канал
-		for ev := range client.Events() {
-			st.events <- ev
-		}
-		close(st.events)
-	}()
 	m.mu.Unlock()
 
 	if err := client.Connect(ctx); err != nil {
 		m.mu.Lock()
 		st.client = nil
-		st.events = nil
 		m.mu.Unlock()
 		return fmt.Errorf("запуск туннеля %q: %w", id, err)
 	}
