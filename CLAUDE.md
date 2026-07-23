@@ -5,7 +5,7 @@ DualVPN: Go application for simultaneous dual Cisco AnyConnect VPN connections.
 Two modes: TUN (admin) and SOCKS5 (no-admin). Wails v2 UI (v2.13.0, ~/go/bin/wails).
 
 ## Environment
-- Go 1.24 at /usr/local/go/bin/go (add to PATH)
+- Go 1.26.5 at /usr/local/go/bin/go (add to PATH)
 - OpenConnect v9.12 at /usr/sbin/openconnect
 - ocproxy at /usr/bin/ocproxy
 - Claude Code v2.1.199 at ~/.local/bin/claude
