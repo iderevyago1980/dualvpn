@@ -37,9 +37,12 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:  app.Startup,
-		OnShutdown: app.Shutdown,
-		Bind:       []interface{}{app},
+		OnStartup:  app.Startup,   // запускает системный трей и трансляцию событий
+		OnShutdown: app.Shutdown,  // останавливает трей и все туннели
+		// Закрытие окна прячет приложение в трей; настоящий выход —
+		// пункт «Выход» в меню трея (BeforeClose тогда вернёт false).
+		OnBeforeClose: app.BeforeClose,
+		Bind:          []interface{}{app},
 	})
 	if err != nil {
 		log.Fatalf("wails: %v", err)
