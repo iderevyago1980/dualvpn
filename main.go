@@ -16,13 +16,14 @@ import (
 	"syscall"
 
 	"dualvpn/internal/config"
-	"dualvpn/internal/socks5"
+	"dualvpn/internal/mode"
 	"dualvpn/internal/vpn"
 )
 
 func main() {
 	cfgPath := flag.String("config", "config.toml", "путь к TOML-конфигу")
 	connect := flag.Bool("connect", false, "реально запускать openconnect (иначе dry-run)")
+	modeFlag := flag.String("mode", "auto", "режим работы: auto|tun|socks5")
 	flag.Parse()
 
 	cfg, err := loadOrCreate(*cfgPath)
@@ -30,7 +31,11 @@ func main() {
 		log.Fatalf("конфигурация: %v", err)
 	}
 
-	fmt.Printf("DualVPN — режим: %s, туннелей: %d\n\n", cfg.Mode.Preferred, len(cfg.Tunnels))
+	runMode := resolveMode(*modeFlag, cfg.Mode.Preferred)
+	log.Printf("режим работы: %s (флаг=%s, конфиг=%s, admin=%v)",
+		runMode, *modeFlag, cfg.Mode.Preferred, mode.IsAdmin())
+
+	fmt.Printf("DualVPN — режим: %s, туннелей: %d\n\n", runMode, len(cfg.Tunnels))
 	for _, t := range cfg.Tunnels {
 		fmt.Printf("  [%s] %s (группа %q) → SOCKS5 127.0.0.1:%d, TUN %s, маршруты %v\n",
 			t.Name, t.Endpoint, t.Group, t.SocksPort, t.TunName, t.Routes)
@@ -49,7 +54,7 @@ func main() {
 		wg.Add(1)
 		go func(t config.Tunnel) {
 			defer wg.Done()
-			runTunnel(ctx, t)
+			runTunnel(ctx, t, runMode)
 		}(t)
 	}
 	wg.Wait()
@@ -69,31 +74,43 @@ func loadOrCreate(path string) (*config.Config, error) {
 	return config.Load(path)
 }
 
-// runTunnel поднимает SOCKS5-сервер и процесс openconnect для одного туннеля,
-// транслируя события статуса в лог до завершения процесса или отмены контекста.
-func runTunnel(ctx context.Context, t config.Tunnel) {
+// resolveMode выбирает итоговый режим работы: флаг CLI имеет приоритет
+// над конфигом, значение "auto" разрешается автодетекцией админ-прав.
+func resolveMode(flagMode, cfgMode string) string {
+	m := flagMode
+	if m == "auto" {
+		m = cfgMode
+	}
+	if m == "auto" || m == "" {
+		m = mode.Detect()
+	}
+	return m
+}
+
+// runTunnel запускает процесс openconnect для одного туннеля и транслирует
+// события статуса в лог до завершения процесса или отмены контекста.
+//
+// В режиме socks5 отдельный SOCKS5-сервер не нужен: openconnect запускает
+// ocproxy (--script-tun), который сам поднимает SOCKS5 на порту туннеля.
+// В режиме tun openconnect создаёт TUN-интерфейс через vpnc-script.
+func runTunnel(ctx context.Context, t config.Tunnel, runMode string) {
 	logf := func(format string, a ...any) {
 		log.Printf("[%s] %s", t.Name, fmt.Sprintf(format, a...))
 	}
 
-	// SOCKS5-прокси туннеля (пока с прямым dialer — интеграция netstack в этапе 3).
-	srv, err := socks5.New(t.SocksPort, nil)
-	if err != nil {
-		logf("SOCKS5: %v", err)
-		return
+	if runMode == "socks5" {
+		logf("SOCKS5 (ocproxy) будет слушать 127.0.0.1:%d", t.SocksPort)
+	} else {
+		logf("TUN-интерфейс: %s", t.TunName)
 	}
-	if err := srv.Start(); err != nil {
-		logf("SOCKS5: %v", err)
-		return
-	}
-	defer srv.Stop() //nolint:errcheck
-	logf("SOCKS5-прокси слушает %s", srv.Addr())
 
 	client := vpn.New(vpn.Options{
-		Server:   t.Endpoint,
-		Group:    t.Group,
-		Username: t.Username,
-		Password: t.Password,
+		Server:    t.Endpoint,
+		Group:     t.Group,
+		Username:  t.Username,
+		Password:  t.Password,
+		Mode:      runMode,
+		SocksPort: t.SocksPort,
 	})
 	if err := client.Start(ctx); err != nil {
 		logf("openconnect: %v", err)
