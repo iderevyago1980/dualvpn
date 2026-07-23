@@ -5,9 +5,19 @@ go 1.25.0
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
+	github.com/elastic/go-sysinfo v1.13.1
 	github.com/getlantern/systray v1.2.2
 	github.com/wailsapp/wails/v2 v2.13.0
 	golang.org/x/sys v0.44.0
+)
+
+require (
+	github.com/elastic/go-windows v1.0.0 // indirect
+	github.com/joeshaw/multierror v0.0.0-20140124173710-69b34d4ec901 // indirect
+	github.com/pion/dtls/v2 v2.2.8-0.20240201071732-2597464081c8 // indirect
+	github.com/prometheus/procfs v0.8.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 )
 
 require (
@@ -46,4 +56,7 @@ require (
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
+	sslcon v0.0.0-00010101000000-000000000000
 )
+
+replace sslcon => github.com/tlslink/sslcon v0.0.0-20241111082012-164ea92dfe60
