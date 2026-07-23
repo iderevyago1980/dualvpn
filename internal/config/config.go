@@ -89,6 +89,8 @@ func (c *Config) Save(path string) error {
 }
 
 // Validate проверяет базовую корректность конфигурации.
+// Значение mode.preferred = "auto" валидно всегда: итоговый режим
+// определяется автодетекцией админ-прав (см. internal/mode).
 func (c *Config) Validate() error {
 	switch c.Mode.Preferred {
 	case "auto", "tun", "socks5":

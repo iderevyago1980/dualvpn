@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,12 +35,13 @@ type Event struct {
 
 // Options — параметры запуска openconnect для одного туннеля.
 type Options struct {
-	Binary   string   // Путь к бинарнику openconnect (по умолчанию /usr/sbin/openconnect)
-	Server   string   // Адрес VPN-сервера (например, vpn1.example.com)
-	Group    string   // Tunnel-group на ASA (--usergroup)
-	Username string   // Логин (--user)
-	Password string   // Пароль; отправляется в stdin на промпт "Password:"
-	Script   string   // Опциональный vpnc-script (например, ocproxy для SOCKS5-режима)
+	Binary    string   // Путь к бинарнику openconnect (по умолчанию /usr/sbin/openconnect)
+	Server    string   // Адрес VPN-сервера (например, vpn1.example.com)
+	Group     string   // Tunnel-group на ASA (--usergroup)
+	Username  string   // Логин (--user)
+	Password  string   // Пароль; отправляется в stdin на промпт "Password:"
+	Mode      string   // Режим туннеля: "tun" (openconnect + vpnc-script) или "socks5" (--script-tun + ocproxy)
+	SocksPort int      // Локальный порт SOCKS5 для ocproxy в режиме socks5
 	ExtraArgs []string // Дополнительные аргументы CLI
 }
 
@@ -99,9 +101,15 @@ func (c *Client) Start(ctx context.Context) error {
 	if c.opts.Group != "" {
 		args = append(args, "--usergroup="+c.opts.Group)
 	}
-	if c.opts.Script != "" {
-		args = append(args, "--script="+c.opts.Script)
+	if c.opts.Mode == "socks5" {
+		// SOCKS5-режим без админ-прав: вместо TUN-интерфейса openconnect
+		// сам запускает ocproxy (--script) и передаёт ему трафик через fd
+		// (переменная окружения VPNFD). ocproxy — userspace-стек lwIP,
+		// поднимающий SOCKS5-сервер на указанном порту.
+		args = append(args, "--script-tun", "--script=ocproxy -D "+strconv.Itoa(c.opts.SocksPort))
 	}
+	// В режиме tun флаги не добавляем: openconnect создаст TUN-интерфейс
+	// и настроит маршруты стандартным vpnc-script (требует админ-прав).
 	args = append(args, c.opts.ExtraArgs...)
 	args = append(args, c.opts.Server) // сервер передаётся позиционным аргументом
 
