@@ -1,0 +1,74 @@
+Задача: Доработка sslcon — 2FA детекция + SOCKS5 packet flow.
+
+ПРОЕКТ: DualVPN (Go). См. .hermes/plans/2026-07-23_185500-dualvpn-sslcon-integration.md.
+
+КОНТЕКСТ:
+- sslcon.Client: InitAuth, PasswordAuth, SetupTunnel, Close (per-tunnel state)
+- sslcon.Tunnel: ReadPacket, WritePacket, PacketFlow, SetupTUN, Close
+- manager.go: использует sslcon.ClientConfig
+- Все тесты PASS, Windows .exe собирается
+
+ЗАДАЧА 1: 2FA детекция (internal/vpn/sslcon/auth.go)
+
+Сейчас Needs2FA() всегда возвращает false. Нужно детектировать запрос 2FA от сервера.
+
+В PasswordAuth(): сервер может ответить:
+- <auth id="success"> — аутентификация успешна
+- <auth id="error"> — ошибка (неверный пароль)
+- <auth id="fail"> — ошибка
+- Статус 200 с телом <form> — сервер запрашивает дополнительные данные (2FA)
+
+Логика:
+1. Если в ответе есть <form> с <input> (и это не group-select) — сервер запрашивает 2FA
+2. Сохранить состояние в Client (needs2FA bool, formFields map)
+3. Needs2FA() → true
+4. Submit2FA(code) → отправить форму с 2FA-кодом (tplPost с templateAuthReply, заполнив поля формы)
+
+Изменения:
+- Добавь поля в Client: needs2FA bool, formAction string, formFields map[string]string
+- В PasswordAuth(): если ответ содержит <form> с <input> — сохранить форму, вернуть ErrNeeds2FA
+- Добавь метод Submit2FA(code string) error — отправляет 2FA-код в форме
+- Добавь метод Needs2FA() bool
+- Обнови run(): если Needs2FA() — emit Event2FARequired, ждать Submit2FA, затем повторить PasswordAuth
+
+ЗАДАЧА 2: SOCKS5 packet flow (internal/vpn/sslcon/tunnel.go + internal/socks5/)
+
+Сейчас PacketFlow() возвращает каналы, но нет интеграции с socks5.Server.
+
+Создай internal/vpn/sslcon/socks5.go:
+- type Socks5Bridge struct { tunnel *Tunnel; server *socks5.Server }
+- func NewSocks5Bridge(tunnel *Tunnel, port int) (*Socks5Bridge, error)
+- func (b *Socks5Bridge) Start(ctx context.Context) — запускает packet flow ↔ SOCKS5
+- func (b *Socks5Bridge) Close() error
+- Интеграция: читать пакеты из tunnel.ReadPacket() → парсить IP/TCP/UDP → передавать в socks5.Server
+- Или: tunnel.PacketFlow() → каналы → socks5.Server
+
+Проще: модифицировать socks5.Server чтобы принимал пакеты из канала:
+- В internal/socks5/server.go добавь метод HandlePackets(ctx context.Context, in <-chan []byte, out chan<- []byte)
+- Этот метод читает IP-пакеты из канала, разбирает TCP/UDP, и обрабатывает как SOCKS5-запросы
+
+ЗАДАЧА 3: Обнови manager.go для SOCKS5
+
+- В Start(): если Mode == "socks5" — создать Socks5Bridge вместо SetupTUN
+- Socks5Bridge запускается на порту из конфига (SocksPort)
+- Событие "connected" когда SOCKS5-сервер слушает
+
+ЗАДАЧА 4: Тесты
+
+- TestNeeds2FA — мок сервера, возвращающего <form> с <input>
+- TestSubmit2FA — отправка 2FA-кода
+- TestSocks5Bridge — создание bridge, проверка портов
+
+ЗАДАЧА 5: Сборка
+
+- go build ./... && go vet ./... && go test ./internal/... -v
+- Все тесты PASS
+- git -c user.name='Hermes Agent' -c user.email='agent@hermes.local' commit -am 'feat: 2FA detection, SOCKS5 packet flow bridge'
+
+ВАЖНО:
+- Комментарии на русском
+- Тесты должны проходить
+- go 1.24
+- Не ломай существующие тесты
+
+PROMPT

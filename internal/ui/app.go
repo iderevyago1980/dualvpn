@@ -306,8 +306,9 @@ func (a *App) registerTunnels() {
 				Username: t.Username,
 				Password: t.Password,
 			},
-			Routes: t.Routes,
-			Mode:   m,
+			Routes:    t.Routes,
+			Mode:      m,
+			SocksPort: t.SocksPort,
 		})
 	}
 	a.manager.ReplaceTunnels(cfgs)
