@@ -1,66 +1,50 @@
+// DualVPN — одновременное подключение к двум Cisco AnyConnect VPN.
+//
+// Точка входа Wails-приложения: загружает конфигурацию, создаёт менеджер
+// туннелей и открывает desktop-окно с UI из каталога frontend/.
+// Биндинги для JS — структура ui.App (window.go.ui.App).
 package main
 
 import (
-	"context"
-	"fmt"
+	"embed"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
-	"dualvpn/internal/vpn"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+
+	"dualvpn/internal/ui"
 )
 
-const (
-	Version = "1.7.0-dual-vpn"
-	DefaultConfigPath = ".dualvpn.toml"
-)
+// Статические файлы фронтенда встраиваются в бинарник.
+//
+//go:embed all:frontend
+var assets embed.FS
 
 func main() {
-	var showVer bool
-	var configFile string
-
-	flag.BoolVar(&showVer, "version", false, "Print version and exit")
-	flag.StringVar(&configFile, "config", DefaultConfigPath, "Path to TOML config file")
-	flag.Parse()
-
-	if showVer {
-		fmt.Println(Version)
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg, err := vpn.DefaultTunnelsConfig() // Use project's built-in config
+	app, err := ui.NewApp("config.toml")
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("инициализация: %v", err)
 	}
 
-	log.Printf("Starting VPN dual client version: %s", Version)
-	log.Printf("Primary tunnel: [%s], Mode: %s", cfg.Tunnel1.ID, cfg.Tunnel1.Mode)
-	log.Printf("Secondary tunnel: [%s], Mode: %s", cfg.Tunnel2.ID, cfg.Tunnel2.Mode)
-
-	mgr, err := vpn.NewDualVPNManager(ctx, cfg)
+	err = wails.Run(&options.App{
+		Title:     "DualVPN",
+		Width:     1000,
+		Height:    700,
+		MinWidth:  800,
+		MinHeight: 600,
+		Frameless: false,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		OnStartup:  app.Startup,   // запускает системный трей и трансляцию событий
+		OnShutdown: app.Shutdown,  // останавливает трей и все туннели
+		// Закрытие окна прячет приложение в трей; настоящий выход —
+		// пункт «Выход» в меню трея (BeforeClose тогда вернёт false).
+		OnBeforeClose: app.BeforeClose,
+		Bind:          []interface{}{app},
+	})
 	if err != nil {
-		log.Fatalf("Failed to create VPN manager: %v", err)
+		log.Fatalf("wails: %v", err)
 	}
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	if err := mgr.DualConnect(ctx); err != nil {
-		// Proceed with partial connectivity
-		log.Printf("WARNING: VPN connection partially established: %v", err)
-	}
-
-	<-sigs
-	
-	log.Println("Received signal, shutting down...")
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer shutdownCancel()
-
-	_ = mgr.DualDisconnect()
-	log.Println("VPN client shutdown complete")
 }
