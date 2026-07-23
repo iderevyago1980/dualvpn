@@ -51,10 +51,12 @@ type App struct {
 	manager *vpn.Manager
 	cfgPath string
 
-	mu     sync.Mutex
-	cfg    *config.Config
-	mode   string // итоговый режим работы: "tun" | "socks5"
-	logBuf []LogEntry
+	mu       sync.Mutex
+	cfg      *config.Config
+	mode     string // итоговый режим работы: "tun" | "socks5"
+	logBuf   []LogEntry
+	tray     *Tray
+	quitting bool // true после команды «Выход» — разрешает закрытие окна
 }
 
 // NewApp загружает конфигурацию (создавая файл по умолчанию при отсутствии),
@@ -74,21 +76,75 @@ func NewApp(cfgPath string) (*App, error) {
 	return a, nil
 }
 
-// Startup вызывается Wails при старте приложения: сохраняет контекст
-// и запускает трансляцию событий менеджера во фронтенд.
+// Startup вызывается Wails при старте приложения: сохраняет контекст,
+// запускает системный трей и трансляцию событий менеджера во фронтенд.
 func (a *App) Startup(ctx context.Context) {
+	tray := NewTray(a, a.ShowWindow)
+
 	a.mu.Lock()
 	a.ctx = ctx
+	a.tray = tray
 	a.mu.Unlock()
 
+	tray.Start()
 	go a.forwardEvents()
 	a.log("info", fmt.Sprintf("DualVPN запущен: режим %s, туннелей %d, admin=%v",
 		a.GetMode(), len(a.GetTunnels()), mode.IsAdmin()))
 }
 
-// Shutdown вызывается Wails при закрытии окна: останавливает все туннели.
+// Shutdown вызывается Wails при выходе: останавливает трей и все туннели.
 func (a *App) Shutdown(_ context.Context) {
+	a.mu.Lock()
+	tray := a.tray
+	a.mu.Unlock()
+
+	if tray != nil {
+		tray.Stop()
+	}
 	a.manager.StopAll()
+}
+
+// BeforeClose перехватывает закрытие окна: вместо выхода прячет его в трей.
+// Возвращает true (отменить закрытие), пока «Выход» не выбран в трее.
+func (a *App) BeforeClose(ctx context.Context) bool {
+	a.mu.Lock()
+	quitting := a.quitting
+	a.mu.Unlock()
+
+	if quitting {
+		return false
+	}
+	runtime.WindowHide(ctx)
+	a.log("info", "окно скрыто в системный трей")
+	return true
+}
+
+// Quit — выход по команде из трея: останавливает туннели и закрывает
+// Wails-приложение (окно к этому моменту может быть скрыто).
+func (a *App) Quit() {
+	a.mu.Lock()
+	a.quitting = true
+	ctx := a.ctx
+	a.mu.Unlock()
+
+	a.manager.StopAll()
+	if ctx != nil {
+		runtime.Quit(ctx)
+	}
+}
+
+// ShowWindow показывает главное окно (вызов из трея или фронтенда).
+func (a *App) ShowWindow() {
+	if ctx := a.context(); ctx != nil {
+		runtime.WindowShow(ctx)
+	}
+}
+
+// HideWindow прячет главное окно в трей.
+func (a *App) HideWindow() {
+	if ctx := a.context(); ctx != nil {
+		runtime.WindowHide(ctx)
+	}
 }
 
 // GetTunnels возвращает список туннелей из конфигурации.
@@ -272,6 +328,14 @@ func (a *App) forwardEvents() {
 		}
 		a.log(level, fmt.Sprintf("[%s] %s: %s", ev.TunnelID, ev.Event.Type, ev.Event.Message))
 
+		// Отражаем смену состояния туннеля в меню трея.
+		switch ev.Event.Type {
+		case vpn.EventConnected:
+			a.trayStatus(ev.TunnelID, true)
+		case vpn.EventDisconnected, vpn.EventError:
+			a.trayStatus(ev.TunnelID, false)
+		}
+
 		if ctx := a.context(); ctx != nil {
 			runtime.EventsEmit(ctx, "tunnel:event", EventPayload{
 				TunnelID: ev.TunnelID,
@@ -282,6 +346,17 @@ func (a *App) forwardEvents() {
 				runtime.EventsEmit(ctx, "tunnel:2fa", ev.TunnelID)
 			}
 		}
+	}
+}
+
+// trayStatus обновляет пункт статуса туннеля в трее (если трей запущен).
+func (a *App) trayStatus(id string, connected bool) {
+	a.mu.Lock()
+	tray := a.tray
+	a.mu.Unlock()
+
+	if tray != nil {
+		tray.UpdateStatus(id, connected)
 	}
 }
 
