@@ -118,6 +118,13 @@ func ensureBase() {
 		if base.GetBaseLogger() == nil {
 			base.Setup()
 		}
+		// utils.SetCommonHeader при CiscoCompat=true переписывает
+		// base.Cfg.AgentName на каждый запрос — при нескольких туннелях
+		// это гонка записи в общий глобал (-race). Фиксируем значение
+		// один раз: условие записи в SetCommonHeader становится ложным,
+		// а User-Agent остаётся "AnyConnect ...".
+		base.Cfg.AgentName = "AnyConnect"
+		base.Cfg.CiscoCompat = false
 	})
 }
 
