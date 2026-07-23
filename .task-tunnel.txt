@@ -1,0 +1,51 @@
+Задача: Форк sslcon tunnel — packet flow для TUN и SOCKS5 режимов.
+
+ПРОЕКТ: DualVPN (Go). См. .hermes/plans/2026-07-23_185500-dualvpn-sslcon-integration.md.
+
+КОНТЕКСТ: Task 1 (auth форк) завершён — internal/vpn/sslcon/auth.go, profile.go, session.go, auth_test.go (6 тестов PASS).
+Теперь нужен tunnel — установка соединения и packet flow.
+
+ИСХОДНИКИ: ~/go/pkg/mod/github.com/tlslink/sslcon@v0.0.0-20241111082012-164ea92dfe60/vpn/tunnel.go
+
+ЗАДАЧИ:
+
+1. Изучи исходник vpn/tunnel.go — как sslcon устанавливает туннель после auth:
+   - SetupTunnel() — что делает
+   - DTLS handshake (pion/dtls)
+   - TLS data channel
+   - TUN interface setup
+   - Packet forwarding
+
+2. Создай internal/vpn/sslcon/tunnel.go — форк tunnel с per-tunnel state:
+   - type Tunnel struct { client *Client; session *Session; tunDev *tun.Device; dtlsConn *dtls.Conn; tlsConn *tls.Conn; routes []Route }
+   - func (c *Client) SetupTunnel(mode string) (*Tunnel, error) — mode: "tun" или "socks5"
+   - func (t *Tunnel) Close() error
+   - Для TUN: func (t *Tunnel) SetupTUN(name string) error — создать TUN-адаптер
+   - Для SOCKS5: func (t *Tunnel) PacketFlow() (<-chan []byte, chan<- []byte) — каналы для интеграции
+   - func (t *Tunnel) ReadPacket() ([]byte, error) — чтение IP-пакета из туннеля
+   - func (t *Tunnel) WritePacket([]byte) error — запись IP-пакета в туннель
+
+3. Интеграция с существующим internal/tun/tun.go:
+   - Используй существующий tun.Device (уже есть в проекте)
+   - Или используй sslcon/tun (golang.zx2c4.com/wintun на Windows)
+
+4. Создай internal/vpn/sslcon/tunnel_test.go:
+   - TestTunnelConfig — конфигурация туннеля
+   - TestTunnelPacketFlow — mock packet flow (без реального TUN)
+   - TestTunnelClose — корректное закрытие
+
+5. Обнови go.mod если нужно (pion/dtls уже должен быть)
+
+6. Убедись: go build ./... && go vet ./... && go test ./internal/vpn/sslcon/... -v
+
+7. git -c user.name='Hermes Agent' -c user.email='agent@hermes.local' commit -am 'feat: sslcon tunnel fork with per-tunnel packet flow'
+
+ВАЖНО:
+- Копируй логику из sslcon/vpn/tunnel.go, но заменяй глобалы на поля
+- Комментарии на русском
+- Для TUN: используй существующий internal/tun (golang.org/x/sys/unix на Linux, wintun на Windows)
+- Для SOCKS5: PacketFlow() должен возвращать каналы для интеграции с socks5.Server
+- Тесты должны проходить
+- go 1.24
+
+PROMPT
