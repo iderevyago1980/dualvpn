@@ -1,0 +1,9 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DualVPN",
+  "outputfilename": "DualVPN",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:serverUrl": "",
+  "wailsjsdir": "./frontend"
+}

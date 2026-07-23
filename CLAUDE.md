@@ -2,7 +2,7 @@
 
 ## Project
 DualVPN: Go application for simultaneous dual Cisco AnyConnect VPN connections.
-Two modes: TUN (admin) and SOCKS5 (no-admin). Wails v3 UI.
+Two modes: TUN (admin) and SOCKS5 (no-admin). Wails v2 UI (v2.13.0, ~/go/bin/wails).
 
 ## Environment
 - Go 1.24 at /usr/local/go/bin/go (add to PATH)
@@ -19,5 +19,7 @@ Two modes: TUN (admin) and SOCKS5 (no-admin). Wails v3 UI.
 - README.md — project overview
 
 ## Commands
-- Go: export PATH="/usr/local/go/bin:$PATH" && go build ./...
+- Go: export PATH="/usr/local/go/bin:$PATH" GOFLAGS="-tags=webkit2_41" && go build ./...
+  (тег webkit2_41 обязателен: в системе только libwebkit2gtk-4.1, без тега Wails ищет 4.0)
+- Wails build: wails build -tags webkit2_41 (НЕ запускать wails dev — на сервере нет GUI)
 - OpenConnect test: openconnect --version
