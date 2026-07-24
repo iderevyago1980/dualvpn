@@ -25,9 +25,10 @@ go test ./... -race -count=3 # тесты (см. ниже про -race)
 ```bash
 make build-linux     # bin/dualvpn-linux (нужны libwebkit2gtk-4.1-dev, libayatana-appindicator3-dev)
 make build-windows   # bin/DualVPN.exe — кросс-компиляция, CGO_ENABLED=0, -H=windowsgui
+make installer       # bin/DualVPN-Setup-<VERSION>.exe — NSIS-инсталлятор (makensis, кросс-сборка на Linux)
 make build           # полноценная Wails-сборка под Windows (wails build)
 ```
-**Не запускай `wails dev` / `make dev`** — на сервере нет GUI.
+**Не запускай `wails dev` / `make dev`** — на сервере нет GUI. Инсталлятор — per-user (`%LOCALAPPDATA%`), без прав администратора; кладёт `wintun.dll` рядом с exe. Версия задаётся `make installer VERSION=x.y.z`.
 
 - Go 1.26.5 в `/usr/local/go` (в go.mod — `go 1.26.3`).
 
@@ -41,7 +42,7 @@ make build           # полноценная Wails-сборка под Windows 
 ⚠️ **Остаточные процесс-глобалы**: пакеты `sslcon/base` и `sslcon/utils` (vendored, не форкнуты) держат общий `base.Cfg` / `base.LocalInterface`. `ensureBase()` (`auth.go`) инициализирует их один раз под `sync.Once` и гасит `CiscoCompat`, иначе `utils.SetCommonHeader` переписывает глобал на каждый запрос → гонка при нескольких туннелях. Любой новый код, трогающий `base.*`, должен помнить: это разделяемое состояние на весь процесс.
 
 ### Два режима — расходятся в `sslcon.Client.run()`
-- **TUN**: `Tunnel.SetupTUN()` создаёт адаптер через `internal/tun` (Linux `/dev/net/tun`, Windows wintun), маршруты ставит `internal/routing`.
+- **TUN** (нужны админ-права): `Tunnel.SetupTUN()` создаёт адаптер через `internal/tun` (Linux `/dev/net/tun` + `ip addr/link`; Windows — драйвер Wintun + `netsh`, требует `wintun.dll` рядом с exe), назначает адрес/MTU и применяет маршруты split-include через `internal/routing`. `internal/tun/Device` прячет платформенный ввод-вывод за `io.ReadWriteCloser`. Имя интерфейса приходит из `ClientConfig.TunName` (пустое → `dualvpnN`).
 - **SOCKS5**: `Manager.Start` подставляет хук `Client.TunnelSetup`, который поднимает `socks5.Bridge` — **gVisor netstack (userspace TCP/IP) поверх `Tunnel.PacketFlow()`**. SOCKS5-клиенты коннектятся на локальный порт, `dialVPN` открывает соединения внутри netstack → трафик уходит в туннель. Без TUN-драйвера и админ-прав. `internal/socks5/server.go` — тонкий фронтенд `armon/go-socks5`.
 
 Режим выбирает `internal/mode.Detect()` (админ → TUN, иначе SOCKS5); `SwitchMode` останавливает все туннели — сменить режим «на лету» нельзя.
