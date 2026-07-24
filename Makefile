@@ -61,6 +61,10 @@ test:
 e2e: ## E2E host-стенд: ocserv + харнесс (SOCKS5 + TUN)
 	@test/e2e/run.sh
 
+.PHONY: e2e-vm
+e2e-vm: ## E2E внутри настоящей Linux-VM (ocserv + QEMU-гость: .deb, harness, GUI-smoke)
+	@test/e2e/vm/linux/run.sh
+
 clean:
 	rm -rf $(BINDIR)/
 
