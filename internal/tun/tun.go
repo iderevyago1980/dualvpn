@@ -2,7 +2,7 @@
 //
 // В TUN-режиме каждый туннель получает собственный интерфейс (dualvpn0,
 // dualvpn1, ...), через который маршрутизируются подсети из конфигурации.
-// Linux: /dev/net/tun + ioctl TUNSETIFF; Windows: wintun.dll (заглушка).
+// Linux: /dev/net/tun + ioctl TUNSETIFF; Windows: драйвер Wintun (wintun.dll).
 package tun
 
 import (

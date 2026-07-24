@@ -24,11 +24,16 @@ go test ./... -race -count=3 # тесты (см. ниже про -race)
 Сборка бинарников (Makefile):
 ```bash
 make build-linux     # bin/dualvpn-linux (нужны libwebkit2gtk-4.1-dev, libayatana-appindicator3-dev)
+make deb             # bin/dualvpn_<VERSION>_amd64.deb — пакет для Debian/Ubuntu
 make build-windows   # bin/DualVPN.exe — кросс-компиляция, CGO_ENABLED=0, -H=windowsgui
 make installer       # bin/DualVPN-Setup-<VERSION>.exe — NSIS-инсталлятор (makensis, кросс-сборка на Linux)
 make build           # полноценная Wails-сборка под Windows (wails build)
 ```
-**Не запускай `wails dev` / `make dev`** — на сервере нет GUI. Инсталлятор — per-user (`%LOCALAPPDATA%`), без прав администратора; кладёт `wintun.dll` рядом с exe. Версия задаётся `make installer VERSION=x.y.z`.
+**Не запускай `wails dev` / `make dev`** — на сервере нет GUI. Инсталлятор Windows — per-user (`%LOCALAPPDATA%`), без прав администратора; кладёт `wintun.dll` рядом с exe. Версия задаётся `make installer VERSION=x.y.z` (та же переменная у `make deb`).
+
+**`.deb` (Debian/Ubuntu)**: `make deb` собирает `build-linux` и пакует бинарь в `/usr/bin/dualvpn` + `.desktop`-ярлык (`build/linux/dualvpn.desktop`) + иконку (`build/linux/dualvpn.svg`). Секция `Depends` (шаблон `build/linux/control.in`) объявляет `libwebkit2gtk-4.1-0`, `libgtk-3-0t64|libgtk-3-0`, `libayatana-appindicator3-1` — **без них голый бинарь на чистой системе молча не стартует** (`cannot open shared object file`); это была одна из причин «ничего не запускается». Собирается на Linux через `dpkg-deb --root-owner-group` (root не нужен).
+
+**Путь конфига** (`main.go: configPath`): приоритет `DUALVPN_CONFIG` → локальный `config.toml` в cwd (dev) → `config.DefaultPath()` = `~/.config/dualvpn/config.toml`. Раньше путь был жёстко относительным `"config.toml"`, и при запуске из меню (cwd = `/`) запись падала → `Fatalf` → приложение не стартовало. При запуске из репозитория поведение прежнее (подхватывается `./config.toml`).
 
 - Go 1.26.5 в `/usr/local/go` (в go.mod — `go 1.26.3`).
 
