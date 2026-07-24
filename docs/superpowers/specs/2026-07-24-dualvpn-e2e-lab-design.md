@@ -238,6 +238,28 @@ ocserv-конфиги секцию `select-group = LAB = ...`, чтобы имя
 Milestone-тест (`TestDualTunnelSocksIsolation`, mockasa-бэкенд) остаётся зелёным
 независимо от этой находки — перепрогнан после диагностики, `PASS` (5.2s).
 
+**RESOLVED, 2026-07-24: путь (а) реализован.** `sslcon` теперь шлёт
+`<group-select>` только когда сервер реально предложил список групп:
+`InitAuth` ставит `Profile.SendGroupSelect = (len(dtd.Auth.Form.Groups) != 0)`,
+оба шаблона (`templateAuthReply`, `template2FAReply`) обёрнуты в
+`{{if .SendGroupSelect}}`. ocserv без `select-group` групп не предлагает → флаг
+`false` → group-select не уходит; реальный ASA список групп предлагает → флаг
+`true` → поведение прежнее. Покрыто тестами: `group_select_test.go`
+(рендер шаблонов, оба направления) и `internal/mockasa/nogroup_test.go`
+(режим `Config.NoGroupSelect` — ocserv-строгий сервер, сквозной auth). mockasa
+получил режим `NoGroupSelect`, эмулирующий ocserv без select-group.
+
+**Проверено против реального ocserv 1.1.6:** оба туннеля поднимаются
+одновременно, auth проходит (401 устранён), harness даёт `exit 0` —
+связность обоих inner-сетей (whoami → 200) и изоляция (A↛B, B↛A) подтверждены.
+
+**Побочная находка (data-plane, не DualVPN): лабораторный ocserv не настраивал
+NAT.** Auth/CSTP работали, но данные до inner-host не доходили: whoami получал
+пакеты с адреса VPN-пула `10.9x.0.x`, а обратного маршрута к пулу не было. ocserv
+сам NAT не поднимает. Устранено на стенде: в образ добавлен `iptables`, `up.sh`
+ставит `MASQUERADE` для `10.90.0.0/24` и `10.91.0.0/24`. Это конфигурация стенда,
+не изменение клиента.
+
 ## Оценка надёжности
 
 - 🟢 Надёжно/быстро: ocserv-контейнеры, mockasa-бэкенд, Linux-harness, проверки.

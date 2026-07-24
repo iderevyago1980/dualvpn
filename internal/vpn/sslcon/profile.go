@@ -34,6 +34,12 @@ type Profile struct {
 	GroupAlias  string
 	ConfigHash  string
 
+	// SendGroupSelect — слать ли <group-select> в auth-reply. Ставится в
+	// InitAuth: true, только если сервер предложил список групп. ocserv без
+	// select-group групп не предлагает и отвергает непрошеный group-select
+	// (реальный 401), поэтому в этом случае поле остаётся false.
+	SendGroupSelect bool
+
 	ComputerName    string
 	DeviceType      string
 	PlatformVersion string
