@@ -5,13 +5,15 @@ package tun
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 )
 
-// Create создаёт TUN-адаптер: открывает /dev/net/tun и привязывает
-// интерфейс с заданным именем через ioctl TUNSETIFF.
-// Требует CAP_NET_ADMIN (админ-права).
+// Create создаёт TUN-адаптер: открывает /dev/net/tun, привязывает интерфейс
+// с заданным именем через ioctl TUNSETIFF, назначает адрес и поднимает
+// интерфейс. Требует CAP_NET_ADMIN (админ-права).
 func Create(cfg Config) (*Device, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -35,10 +37,33 @@ func Create(cfg Config) (*Device, error) {
 		unix.Close(fd) //nolint:errcheck // уже возвращаем более важную ошибку
 		return nil, fmt.Errorf("ioctl TUNSETIFF (%s): %w", cfg.Name, err)
 	}
+	name := ifr.Name() // ядро могло скорректировать имя
+
+	// Назначаем адрес (/32 — точечный маршрут выдаётся сервером отдельно)
+	// и поднимаем интерфейс.
+	if err := configureLinux(name, cfg); err != nil {
+		unix.Close(fd) //nolint:errcheck
+		return nil, err
+	}
 
 	return &Device{
-		Name: ifr.Name(), // ядро могло скорректировать имя
-		fd:   fd,
-		file: os.NewFile(uintptr(fd), "/dev/net/tun"),
+		Name: name,
+		io:   os.NewFile(uintptr(fd), "/dev/net/tun"),
 	}, nil
+}
+
+// configureLinux назначает IPv4-адрес, MTU и поднимает интерфейс через
+// утилиту ip (iproute2).
+func configureLinux(name string, cfg Config) error {
+	cmds := [][]string{
+		{"ip", "addr", "add", cfg.Address + "/32", "dev", name},
+		{"ip", "link", "set", "dev", name, "mtu", strconv.Itoa(cfg.MTU)},
+		{"ip", "link", "set", "dev", name, "up"},
+	}
+	for _, argv := range cmds {
+		if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %w (%s)", argv, err, out)
+		}
+	}
+	return nil
 }
