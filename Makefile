@@ -65,6 +65,10 @@ e2e: ## E2E host-стенд: ocserv + харнесс (SOCKS5 + TUN)
 e2e-vm: ## E2E внутри настоящей Linux-VM (ocserv + QEMU-гость: .deb, harness, GUI-smoke)
 	@test/e2e/vm/linux/run.sh
 
+.PHONY: e2e-win-vm
+e2e-win-vm: ## E2E внутри настоящей Windows 11 VM (autounattend + harness + GUI-smoke)
+	@test/e2e/vm/windows/run-win.sh
+
 clean:
 	rm -rf $(BINDIR)/
 
