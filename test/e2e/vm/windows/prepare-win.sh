@@ -26,6 +26,10 @@ MNT="$WORK/rmnt"; mkdir -p "$MNT"
 if mountpoint -q "$MNT"; then sudo umount "$MNT"; fi   # снять залипший mount от прерванного прогона
 sudo mount -o loop "$WORK/result.img" "$MNT"
 echo "result-disk" | sudo tee "$MNT/RESULTDISK.marker" >/dev/null
+# startup.nsh: OVMF при отсутствии загрузочной записи уходит в UEFI Shell и
+# автозапускает startup.nsh с FAT-тома — он chainload'ит cdboot_noprompt.efi
+# установочного CD (без блокера "Press any key"). Надёжнее, чем bootindex/sendkey.
+sudo cp startup.nsh "$MNT/startup.nsh"
 sudo umount "$MNT" || true; rmdir "$MNT" 2>/dev/null || true
 
 echo "==> install-диск (пустой qcow2, до 32G)"
