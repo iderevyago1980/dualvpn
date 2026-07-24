@@ -1,3 +1,8 @@
 dualvpn
 config.toml
 bin/
+
+# E2E-стенд: генерируемые артефакты
+test/e2e/backends/ocserv/certs/
+test/e2e/backends/ocserv/passwd
+bin/dualvpn-harness

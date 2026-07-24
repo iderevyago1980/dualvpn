@@ -1,0 +1,58 @@
+# Стенд ocserv: два сервера, каждый со своей изолированной inner-сетью и whoami.
+#
+# Расхождение с брифом: образ `tiredofit/ocserv:latest` не существует на Docker Hub
+# (pull access denied). Вместо него собираем собственный минимальный образ из
+# debian:bookworm-slim + штатный пакет `ocserv` (см. Dockerfile.ocserv) — тот же
+# бинарь ocserv/ocpasswd, что использует Debian/Ubuntu, полный контроль над путями
+# конфигов.
+services:
+  ocserv-a:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocserv
+    image: dualvpn-e2e/ocserv:latest
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    ports: ["127.0.0.1:4443:443/tcp"]
+    volumes:
+      - ./ocserv-a.conf:/etc/ocserv/ocserv.conf:ro
+      - ./certs:/etc/ocserv/certs:ro
+      - ./passwd:/etc/ocserv/passwd:ro
+    command: ["-c", "/etc/ocserv/ocserv.conf", "-f"]
+    networks: [wan, inner_a]
+  whoami-a:
+    image: traefik/whoami:latest
+    command: ["--port=80"]
+    networks:
+      inner_a:
+        ipv4_address: 192.168.90.10
+
+  ocserv-b:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocserv
+    image: dualvpn-e2e/ocserv:latest
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    ports: ["127.0.0.1:4444:443/tcp"]
+    volumes:
+      - ./ocserv-b.conf:/etc/ocserv/ocserv.conf:ro
+      - ./certs:/etc/ocserv/certs:ro
+      - ./passwd:/etc/ocserv/passwd:ro
+    command: ["-c", "/etc/ocserv/ocserv.conf", "-f"]
+    networks: [wan, inner_b]
+  whoami-b:
+    image: traefik/whoami:latest
+    command: ["--port=80"]
+    networks:
+      inner_b:
+        ipv4_address: 192.168.91.10
+
+networks:
+  wan:
+  inner_a:
+    internal: true
+    ipam: { config: [{ subnet: 192.168.90.0/24 }] }
+  inner_b:
+    internal: true
+    ipam: { config: [{ subnet: 192.168.91.0/24 }] }

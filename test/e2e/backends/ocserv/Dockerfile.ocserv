@@ -1,0 +1,9 @@
+# Минимальный образ ocserv из штатного пакета Debian (tiredofit/ocserv не существует
+# на Docker Hub — см. журнал расхождений в task-5-report.md). Пакет ocserv в Debian
+# уже содержит ocpasswd и весь набор бинарей, нужный для лаб-стенда.
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ocserv iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["ocserv"]
+CMD ["-c", "/etc/ocserv/ocserv.conf", "-f"]
