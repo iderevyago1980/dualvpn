@@ -10,7 +10,7 @@ require (
 	github.com/pion/dtls/v2 v2.2.8-0.20240201071732-2597464081c8
 	github.com/wailsapp/wails/v2 v2.13.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/sys v0.44.0
+	golang.org/x/sys v0.47.0
 	gvisor.dev/gvisor v0.0.0-20230916030846-1d82564559db
 )
 
@@ -60,9 +60,9 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/net v0.54.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	sslcon v0.0.0-00010101000000-000000000000
 )
 
