@@ -35,6 +35,19 @@ type Config struct {
 	Tunnels []Tunnel `toml:"tunnels"`
 }
 
+// DefaultPath возвращает путь к пользовательскому конфигу в стандартном
+// каталоге настроек ОС: $XDG_CONFIG_HOME/dualvpn/config.toml на Linux
+// (обычно ~/.config/dualvpn/config.toml), %AppData%\dualvpn\config.toml
+// на Windows. Нужен для запуска из меню/ярлыка, где рабочий каталог —
+// корень или домашний, и относительный "config.toml" писать некуда.
+func DefaultPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("каталог конфигурации пользователя: %w", err)
+	}
+	return filepath.Join(dir, "dualvpn", "config.toml"), nil
+}
+
 // Default возвращает конфигурацию по умолчанию с двумя эндпоинтами из SPEC.md.
 func Default() *Config {
 	return &Config{
