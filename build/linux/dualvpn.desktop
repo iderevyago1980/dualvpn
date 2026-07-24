@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DualVPN
+GenericName=VPN Client
+Comment=Одновременное подключение к двум Cisco AnyConnect VPN
+Exec=dualvpn
+Icon=dualvpn
+Terminal=false
+Categories=Network;Security;GTK;
+Keywords=VPN;AnyConnect;Cisco;SSL;
+StartupNotify=true

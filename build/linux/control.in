@@ -1,0 +1,13 @@
+Package: dualvpn
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCH@
+Depends: libc6, libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0, libayatana-appindicator3-1
+Maintainer: DualVPN <dualvpn@localhost>
+Homepage: https://github.com/
+Description: Одновременное подключение к двум Cisco AnyConnect VPN
+ DualVPN — приложение для одновременной работы с двумя Cisco AnyConnect
+ (SSL/TLS) VPN-эндпоинтами. Два режима: TUN (нужны права администратора)
+ и SOCKS5 (без прав, через userspace-стек). Desktop-UI на Wails и системный
+ трей.
