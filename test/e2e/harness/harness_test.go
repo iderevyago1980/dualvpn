@@ -1,4 +1,4 @@
-package main
+package harness
 
 import (
 	"testing"
@@ -13,7 +13,7 @@ func TestBuildConfigs(t *testing.T) {
 			{Name: "b", Endpoint: "127.0.0.1:4444", Group: "GB", Username: "u2", Password: "p2", SocksPort: 1081, TunName: "tb", Routes: []string{"192.168.91.0/24"}},
 		},
 	}
-	got := buildConfigs(cfg, "socks5", true)
+	got := BuildConfigs(cfg, "socks5", true)
 	if len(got) != 2 {
 		t.Fatalf("len = %d, ожидалось 2", len(got))
 	}

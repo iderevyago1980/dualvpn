@@ -1,3 +1,7 @@
+// Package main (dualvpn-harness) — headless-драйвер стенда: поднимает
+// туннели через боевой vpn.Manager без Wails. Логика вынесена в
+// dualvpn/test/e2e/harness — этот файл лишь разбирает флаги и печатает
+// результат базовой проверки связности.
 package main
 
 import (
@@ -12,6 +16,7 @@ import (
 	"dualvpn/internal/config"
 	"dualvpn/internal/vpn/sslcon"
 	"dualvpn/test/e2e/checks"
+	"dualvpn/test/e2e/harness"
 )
 
 func main() {
@@ -36,7 +41,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	m, ids, err := run(ctx, Options{
+	m, ids, err := harness.Run(ctx, harness.Options{
 		Cfg: cfg, Mode: mode, Insecure: *insecure,
 		ReadyTimeout: *timeout, Logf: log.Printf,
 	})
@@ -62,7 +67,7 @@ func main() {
 		} else {
 			client = checks.DirectClient(10 * time.Second)
 		}
-		status, body, err := getWithRetry(client, t.ProbeURL, 15, time.Second)
+		status, body, err := harness.GetWithRetry(client, t.ProbeURL, 15, time.Second)
 		if err != nil || status != 200 {
 			log.Printf("FAIL [%s] %s -> status=%d err=%v", t.Name, t.ProbeURL, status, err)
 			failures++
@@ -74,20 +79,4 @@ func main() {
 	if failures > 0 {
 		os.Exit(failures)
 	}
-}
-
-// getWithRetry повторяет GET, пока не получит 200 либо не исчерпает попытки:
-// SOCKS5-мост становится готов чуть позже события Connected.
-func getWithRetry(client *http.Client, url string, attempts int, pause time.Duration) (int, string, error) {
-	var lastErr error
-	var lastStatus int
-	for i := 0; i < attempts; i++ {
-		status, body, err := checks.GetBody(client, url)
-		if err == nil && status == 200 {
-			return status, body, nil
-		}
-		lastErr, lastStatus = err, status
-		time.Sleep(pause)
-	}
-	return lastStatus, "", lastErr
 }
