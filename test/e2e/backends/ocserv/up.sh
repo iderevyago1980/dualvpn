@@ -30,3 +30,15 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
+
+# NAT: VPN-пул → внутренняя сеть. Без MASQUERADE inner-host (whoami) получает
+# пакеты с адреса пула 10.9x.0.x, но обратного маршрута к пулу не имеет →
+# ответы теряются, и data-path «висит» при полностью рабочих auth/CSTP.
+# ocserv сам NAT не настраивает, поэтому добавляем правило идемпотентно.
+docker compose exec -T ocserv-a sh -c \
+  'iptables -t nat -C POSTROUTING -s 10.90.0.0/24 -j MASQUERADE 2>/dev/null \
+   || iptables -t nat -A POSTROUTING -s 10.90.0.0/24 -j MASQUERADE'
+docker compose exec -T ocserv-b sh -c \
+  'iptables -t nat -C POSTROUTING -s 10.91.0.0/24 -j MASQUERADE 2>/dev/null \
+   || iptables -t nat -A POSTROUTING -s 10.91.0.0/24 -j MASQUERADE'
+echo "MASQUERADE для VPN-пулов настроен"

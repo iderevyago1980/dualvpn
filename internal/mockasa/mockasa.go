@@ -71,6 +71,12 @@ type Config struct {
 	HostIP       string            // адрес виртуального хоста внутренней сети
 	SplitInclude []string          // X-CSTP-Split-Include, формат "сеть/маска"
 	MTU          int               // X-CSTP-MTU (по умолчанию 1399)
+
+	// NoGroupSelect эмулирует ocserv без select-group: сервер не предлагает
+	// список групп в init-форме и отвергает непустой <group-select> в
+	// auth-reply (аналог реального 401). Позволяет проверять совместимость
+	// клиента, который по конфигу всегда знает свою группу.
+	NoGroupSelect bool
 }
 
 // Server — экземпляр мок-шлюза.
@@ -93,7 +99,7 @@ func New(cfg Config) (*Server, error) {
 	if len(cfg.Users) == 0 {
 		return nil, errors.New("mockasa: не заданы пользователи")
 	}
-	if len(cfg.Groups) == 0 {
+	if len(cfg.Groups) == 0 && !cfg.NoGroupSelect {
 		return nil, errors.New("mockasa: не заданы группы")
 	}
 	if net.ParseIP(cfg.VPNAddress) == nil {
@@ -285,6 +291,19 @@ func (s *Server) handleAuth(st *connState, body []byte) string {
 		st.await2FA = false
 		return s.xmlComplete(s.issueToken())
 
+	case msg.Type == "auth-reply" && s.cfg.NoGroupSelect:
+		// ocserv-строгий режим: непрошеный group-select отвергается (401).
+		if msg.GroupSelect != "" {
+			return s.xmlError("unexpected group-select")
+		}
+		pass, ok := s.cfg.Users[msg.Auth.Username]
+		if !ok || pass != msg.Auth.Password {
+			return s.xmlError("Login failed")
+		}
+		st.username = msg.Auth.Username
+		st.group = ""
+		return s.xmlComplete(s.issueToken())
+
 	case msg.Type == "auth-reply":
 		group := msg.GroupSelect
 		if !inList(s.cfg.Groups, group) {
@@ -332,6 +351,9 @@ func (s *Server) checkCookie(req *http.Request) bool {
 // xmlInit — ответ на init: форма логина со списком групп.
 // Поля username/password/group_list не считаются клиентом 2FA-формой.
 func (s *Server) xmlInit() string {
+	if s.cfg.NoGroupSelect {
+		return s.xmlInitNoGroups()
+	}
 	var opts strings.Builder
 	for _, g := range s.cfg.Groups {
 		opts.WriteString("<option>" + xmlEscape(g) + "</option>")
@@ -349,6 +371,22 @@ func (s *Server) xmlInit() string {
             <input type="text" name="username" label="Username:"></input>
             <input type="password" name="password" label="Password:"></input>
             <select name="group_list" label="GROUP:">` + opts.String() + `</select>
+        </form>
+    </auth>
+</config-auth>`
+}
+
+// xmlInitNoGroups — init-форма в стиле ocserv без select-group: только
+// username/password, без <select name="group_list"> и без opaque с группой.
+// Клиент увидит пустой список групп и не станет слать <group-select>.
+func (s *Server) xmlInitNoGroups() string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<config-auth client="vpn" type="auth-request" aggregate-auth-version="2">
+    <auth id="main">
+        <message>Please enter your username and password.</message>
+        <form method="post" action="` + authFormAction + `">
+            <input type="text" name="username" label="Username:"></input>
+            <input type="password" name="password" label="Password:"></input>
         </form>
     </auth>
 </config-auth>`
