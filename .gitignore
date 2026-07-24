@@ -9,3 +9,6 @@ bin/dualvpn-harness
 
 # E2E Linux-VM: скачиваемые/генерируемые артефакты
 test/e2e/vm/linux/work/
+
+# E2E Windows-VM: генерируемые артефакты
+test/e2e/vm/windows/work/
