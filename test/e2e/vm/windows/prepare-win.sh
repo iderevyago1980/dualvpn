@@ -23,9 +23,10 @@ xorriso -as mkisofs -output "$WORK/data.iso" -volid DUALVPN -joliet -rock "$STAG
 echo "==> FAT-диск результата (том RESULT + маркер)"
 rm -f "$WORK/result.img"; truncate -s 64M "$WORK/result.img"; mkfs.vfat -n RESULT "$WORK/result.img" >/dev/null
 MNT="$WORK/rmnt"; mkdir -p "$MNT"
+if mountpoint -q "$MNT"; then sudo umount "$MNT"; fi   # снять залипший mount от прерванного прогона
 sudo mount -o loop "$WORK/result.img" "$MNT"
 echo "result-disk" | sudo tee "$MNT/RESULTDISK.marker" >/dev/null
-sudo umount "$MNT"; rmdir "$MNT"
+sudo umount "$MNT" || true; rmdir "$MNT" 2>/dev/null || true
 
 echo "==> install-диск (пустой qcow2, до 32G)"
 rm -f "$WORK/win.qcow2"; qemu-img create -f qcow2 "$WORK/win.qcow2" 32G >/dev/null
