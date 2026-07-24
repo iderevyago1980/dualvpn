@@ -12,6 +12,9 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -26,6 +29,7 @@ type Tray struct {
 
 	mu          sync.Mutex
 	statusItems map[string]*systray.MenuItem // id туннеля → пункт статуса
+	started     bool                         // systray.Run был запущен (см. Start/Stop)
 }
 
 // NewTray создаёт трей для приложения. onShow вызывается по пункту
@@ -40,13 +44,53 @@ func NewTray(app *App, onShow func()) *Tray {
 
 // Start запускает цикл systray в отдельной горутине.
 // systray.Run блокируется до systray.Quit, поэтому вызов неблокирующий.
+//
+// Если окружение не поддерживает системный трей (на Linux — нет session
+// D-Bus), трей пропускается: getlantern/systray в этом случае аварийно
+// завершает ПРОЦЕСС (SIGABRT на C-уровне внутри ayatana-appindicator, Go
+// recover его не ловит), поэтому единственный надёжный путь — не запускать
+// его вовсе. Окно приложения при этом продолжает работать без иконки в трее.
 func (t *Tray) Start() {
+	if !trayEnvAvailable() {
+		log.Println("трей: окружение не поддерживает системный трей (нет session D-Bus) — пропускаю")
+		return
+	}
+	t.started = true
 	go systray.Run(t.onReady, t.onExit)
 }
 
 // Stop завершает цикл systray и убирает иконку из трея.
+// Если трей не запускался (Start пропустил его), делать нечего.
 func (t *Tray) Stop() {
+	if !t.started {
+		return
+	}
 	systray.Quit()
+}
+
+// trayEnvAvailable сообщает, можно ли поднимать системный трей в текущем
+// окружении. На Windows/macOS трей не зависит от D-Bus — всегда true.
+// На Linux нужен session D-Bus (иначе SIGABRT, см. Start).
+func trayEnvAvailable() bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	return hasSessionBus()
+}
+
+// hasSessionBus эвристически определяет наличие session D-Bus: либо задан
+// адрес шины DBUS_SESSION_BUS_ADDRESS, либо существует сокет
+// $XDG_RUNTIME_DIR/bus (путь шины по умолчанию в современных сессиях).
+func hasSessionBus() bool {
+	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") != "" {
+		return true
+	}
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+		if _, err := os.Stat(filepath.Join(xdg, "bus")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateStatus обновляет текст пункта статуса туннеля.

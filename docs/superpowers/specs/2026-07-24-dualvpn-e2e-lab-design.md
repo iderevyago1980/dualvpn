@@ -315,6 +315,18 @@ DualVPN устойчивым к отсутствию шины (не панико
 пробросил код через `run.sh`. Ядро стенда (`make e2e`, milestone-тесты) от
 VM-слоя не зависит и не затронуто.
 
+**RESOLVED, 2026-07-24: выбран второй путь — трей DualVPN сделан устойчивым к
+отсутствию шины.** `internal/ui/tray.go`: `Tray.Start` теперь вызывает
+`systray.Run` только если окружение поддерживает трей (`trayEnvAvailable` →
+на Linux `hasSessionBus`: задан `DBUS_SESSION_BUS_ADDRESS` или есть сокет
+`$XDG_RUNTIME_DIR/bus`); иначе трей пропускается с логом, окно приложения
+работает без иконки. Это правильный продуктовый фикс (SIGABRT был C-уровневым,
+`recover` его не ловит) и он же снимает провал GUI-smoke — dbus в госте больше
+не нужен. Проверено локально: `env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR
+xvfb-run ./bin/dualvpn-linux` раньше падал `SIGABRT`, теперь живёт до таймаута
+(лог «трей: окружение не поддерживает системный трей — пропускаю»). Покрыто
+`internal/ui/tray_test.go` (`TestHasSessionBus`).
+
 ## Оценка надёжности
 
 - 🟢 Надёжно/быстро: ocserv-контейнеры, mockasa-бэкенд, Linux-harness, проверки.
