@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f2937"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#10b981"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <!-- левый туннель-щит -->
+  <path d="M96 60 L48 80 v40 c0 34 22 58 48 72 26-14 48-38 48-72 V80 Z"
+        fill="url(#a)" fill-opacity="0.92"/>
+  <!-- правый туннель-щит (перекрывает) -->
+  <path d="M160 60 L112 80 v40 c0 34 22 58 48 72 26-14 48-38 48-72 V80 Z"
+        fill="url(#b)" fill-opacity="0.92"/>
+  <!-- замок в зоне перекрытия -->
+  <g transform="translate(128 132)" fill="#0f172a">
+    <rect x="-20" y="-2" width="40" height="34" rx="7"/>
+    <path d="M-13 -2 v-9 a13 13 0 0 1 26 0 v9 h-9 v-9 a4 4 0 0 0 -8 0 v9 Z"/>
+  </g>
+</svg>

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	gosocks5 "github.com/armon/go-socks5"
 )
@@ -23,9 +24,11 @@ type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // Server — SOCKS5-сервер одного туннеля.
 type Server struct {
-	port     int
+	port  int
+	inner *gosocks5.Server
+
+	mu       sync.Mutex // защищает listener: Stop может прийти конкурентно
 	listener net.Listener
-	inner    *gosocks5.Server
 }
 
 // New создаёт SOCKS5-сервер на указанном локальном порту.
@@ -55,17 +58,23 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("прослушивание %s: %w", s.Addr(), err)
 	}
+	s.mu.Lock()
 	s.listener = ln
+	s.mu.Unlock()
 	go s.inner.Serve(ln) //nolint:errcheck // Serve возвращает ошибку при закрытии listener
 	return nil
 }
 
-// Stop останавливает сервер, закрывая listener.
+// Stop останавливает сервер, закрывая listener. Потокобезопасен и
+// идемпотентен: может вызываться одновременно из Bridge.Close и
+// горутины отмены контекста.
 func (s *Server) Stop() error {
-	if s.listener == nil {
+	s.mu.Lock()
+	ln := s.listener
+	s.listener = nil
+	s.mu.Unlock()
+	if ln == nil {
 		return nil
 	}
-	err := s.listener.Close()
-	s.listener = nil
-	return err
+	return ln.Close()
 }

@@ -27,12 +27,26 @@ type Tunnel struct {
 	Routes    []string `toml:"routes"`     // Подсети для split-tunneling (CIDR)
 	Username  string   `toml:"username"`   // Логин VPN (может быть пустым — запросим интерактивно)
 	Password  string   `toml:"password"`   // Пароль VPN (может быть пустым — запросим интерактивно)
+	ProbeURL  string   `toml:"probe_url"`  // URL внутри VPN для проверки связности на стенде (E2E)
 }
 
 // Config — корневая структура конфигурационного файла.
 type Config struct {
 	Mode    Mode     `toml:"mode"`
 	Tunnels []Tunnel `toml:"tunnels"`
+}
+
+// DefaultPath возвращает путь к пользовательскому конфигу в стандартном
+// каталоге настроек ОС: $XDG_CONFIG_HOME/dualvpn/config.toml на Linux
+// (обычно ~/.config/dualvpn/config.toml), %AppData%\dualvpn\config.toml
+// на Windows. Нужен для запуска из меню/ярлыка, где рабочий каталог —
+// корень или домашний, и относительный "config.toml" писать некуда.
+func DefaultPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("каталог конфигурации пользователя: %w", err)
+	}
+	return filepath.Join(dir, "dualvpn", "config.toml"), nil
 }
 
 // Default возвращает конфигурацию по умолчанию с двумя эндпоинтами из SPEC.md.

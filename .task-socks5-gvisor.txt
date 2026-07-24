@@ -1,0 +1,106 @@
+Задача: SOCKS5 packet flow через gVisor netstack + 2FA детекция.
+
+ПРОЕКТ: DualVPN (Go 1.26). См. internal/vpn/sslcon/.
+
+КОНТЕКСТ:
+- sslcon.Client: InitAuth, PasswordAuth, SetupTunnel, Close (per-tunnel state)
+- sslcon.Tunnel: ReadPacket, WritePacket, PacketFlow, SetupTUN, Close
+- manager.go: использует sslcon.ClientConfig
+- gVisor УСТАНОВЛЕН: gvisor.dev/gvisor@v0.0.0-20260723014305
+- Go 1.26.3 в go.mod
+- Все тесты PASS, build OK
+- internal/socks5/server.go — заглушка (пустой пакет)
+
+ЗАДАЧА 1: SOCKS5 bridge через gVisor netstack
+
+Создай internal/socks5/bridge.go:
+- Используй gVisor netstack для userspace TCP/IP стека
+- gVisor создаёт virtual network stack, куда пакеты из tunnel.ReadPacket() попадают как ingress
+- TCP/UDP соединения из netstack проксируются через SOCKS5-сервер на указанном порту
+
+Структура:
+```go
+package socks5
+
+import (
+    "context"
+    "gvisor.dev/gvisor/pkg/buffer"
+    "gvisor.dev/gvisor/pkg/tcpip"
+    "gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+    "gvisor.dev/gvisor/pkg/tcpip/header"
+    "gvisor.dev/gvisor/pkg/tcpip/link/channel"
+    "gvisor.dev/gvisor/pkg/tcpip/stack"
+    "gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+    "gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+    "gvisor.dev/gvisor/pkg/waiter"
+)
+
+// Bridge — SOCKS5 сервер поверх gVisor netstack.
+// Читает IP-пакеты из tunnel, передаёт в gVisor, SOCKS5-клиенты
+// подключаются на локальный порт и получают доступ к VPN-сети.
+type Bridge struct {
+    port    int
+    stack   *stack.Stack
+    linkEP  *channel.Endpoint
+    inChan  <-chan []byte  // пакеты из tunnel (ingress)
+    outChan chan<- []byte  // пакеты в tunnel (egress)
+    listen  net.Listener
+}
+
+func NewBridge(port int, in <-chan []byte, out chan<- []byte) (*Bridge, error)
+func (b *Bridge) Start(ctx context.Context) error  // запускает SOCKS5 + packet pump
+func (b *Bridge) Close() error
+```
+
+Логика:
+1. Создаём gVisor stack с NIC (channel.Endpoint)
+2. injectPackets(): читаем inChan → stack.InjectInboundPacket (ingress)
+3. extractPackets(): gVisor link channel → outChan (egress)
+4. SOCKS5-сервер: слушает на 127.0.0.1:port, при подключении клиента:
+   - Парсит SOCKS5-запрос (CONNECT/BIND/UDP ASSOCIATE)
+   - Открывает gonet.DialContext через gVisor stack → VPN-сеть
+   - Проксирует данные между SOCKS5-клиентом и gVisor-соединением
+
+ЗАДАЧА 2: 2FA детекция (internal/vpn/sslcon/auth.go)
+
+Сейчас Needs2FA() всегда возвращает false. Нужно детектировать 2FA от сервера.
+
+В PasswordAuth(): сервер может вернуть:
+- <auth id="success"> — успех
+- <auth id="error"> — ошибка
+- Форму с <input> для 2FA-кода
+
+Добавь:
+- Поле needs2FA bool в Client
+- В PasswordAuth(): если ответ содержит форму с полем для 2FA — сохранить состояние, вернуть ErrNeeds2FA
+- Метод Submit2FA(code string) error — отправляет 2FA-код
+- Метод Needs2FA() bool
+- Обнови run() в auth.go: если Needs2FA() — emit Event2FARequired, ждать код
+
+ЗАДАЧА 3: Интеграция в manager.go
+
+В Start(): если Mode == "socks5" — создать Bridge вместо SetupTUN:
+- tunnel.PacketFlow() возвращает (inChan, outChan)
+- bridge := socks5.NewBridge(port, inChan, outChan)
+- bridge.Start(ctx)
+- Событие "connected" когда SOCKS5 слушает
+
+ЗАДАЧА 4: Тесты
+
+- TestBridgeCreation — создание Bridge, проверка порта
+- TestNeeds2FA — мок ответа сервера с формой 2FA
+- TestSubmit2FA — отправка кода
+
+ЗАДАЧА 5: Сборка
+
+- go build ./... && go vet ./... && go test ./internal/... -v
+- Все тесты PASS
+- git -c user.name='Hermes Agent' -c user.email='agent@hermes.local' commit -am 'feat: SOCKS5 via gVisor netstack, 2FA detection'
+
+ВАЖНО:
+- Комментарии на русском
+- Go 1.26, gVisor установлен
+- Не ломай существующие тесты
+- CGO_ENABLED=0 для Windows сборки (gVisor — pure Go, работает)
+
+PROMPT

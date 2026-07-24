@@ -1,6 +1,6 @@
 module dualvpn
 
-go 1.25.0
+go 1.26.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -10,15 +10,20 @@ require (
 	github.com/pion/dtls/v2 v2.2.8-0.20240201071732-2597464081c8
 	github.com/wailsapp/wails/v2 v2.13.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/sys v0.44.0
+	golang.org/x/sys v0.47.0
+	gvisor.dev/gvisor v0.0.0-20230916030846-1d82564559db
 )
 
 require (
 	github.com/elastic/go-windows v1.0.0 // indirect
+	github.com/google/btree v1.1.2 // indirect
 	github.com/joeshaw/multierror v0.0.0-20140124173710-69b34d4ec901 // indirect
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/transport/v3 v3.0.1 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
+	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
+	golang.org/x/time v0.15.0 // indirect
+	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 )
 
@@ -55,9 +60,9 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/net v0.54.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	sslcon v0.0.0-00010101000000-000000000000
 )
 

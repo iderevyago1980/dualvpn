@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"sync"
 
+	"dualvpn/internal/socks5"
 	"dualvpn/internal/vpn/sslcon"
 )
 
 // TunnelConfig — конфигурация одного туннеля под управлением менеджера.
 type TunnelConfig struct {
-	ID     string              // Уникальный идентификатор туннеля (например, "astra", "mti")
-	Opts   sslcon.ClientConfig // Параметры sslcon (нативный Go-клиент)
-	Routes []string            // Подсети (CIDR), маршрутизируемые через этот туннель в TUN-режиме
-	Mode   string              // "tun" или "socks5"
+	ID        string              // Уникальный идентификатор туннеля (например, "astra", "mti")
+	Opts      sslcon.ClientConfig // Параметры sslcon (нативный Go-клиент)
+	Routes    []string            // Подсети (CIDR), маршрутизируемые через этот туннель в TUN-режиме
+	Mode      string              // "tun" или "socks5"
+	SocksPort int                 // Локальный порт SOCKS5-прокси (режим socks5)
 }
 
 // ManagerEvent — событие туннеля с указанием его идентификатора.
@@ -26,7 +28,7 @@ type ManagerEvent struct {
 type tunnelState struct {
 	cfg       TunnelConfig
 	client    *sslcon.Client
-	events    chan sslcon.Event // Канал событий текущего клиента (nil до запуска)
+	bridge    *socks5.Bridge // SOCKS5-мост поверх gVisor netstack (режим socks5)
 	connected bool
 }
 
@@ -86,21 +88,47 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("туннель %q уже запущен", id)
 	}
-	client := sslcon.NewClient(st.cfg.Opts)
-	st.client = client
-	st.events = make(chan sslcon.Event, 16) // буфер для событий клиента
-	go func() { // копируем события из клиента в наш канал
-		for ev := range client.Events() {
-			st.events <- ev
+	opts := st.cfg.Opts
+	if opts.Mode == "" {
+		opts.Mode = st.cfg.Mode // режим туннеля задаётся конфигурацией менеджера
+	}
+	client := sslcon.NewClient(opts)
+	if st.cfg.Mode == sslcon.ModeSOCKS5 {
+		// В SOCKS5-режиме вместо TUN-адаптера поднимаем Bridge:
+		// gVisor netstack поверх packet flow туннеля
+		port := st.cfg.SocksPort
+		client.TunnelSetup = func(t *sslcon.Tunnel) error {
+			in, out := t.PacketFlow()
+			bridge, err := socks5.NewBridge(port, in, out)
+			if err != nil {
+				return err
+			}
+			if addr := t.CSess().VPNAddress; addr != "" {
+				if err := bridge.SetLocalAddress(addr); err != nil {
+					_ = bridge.Close()
+					return err
+				}
+			}
+			if err := bridge.Start(ctx); err != nil {
+				_ = bridge.Close()
+				return err
+			}
+			m.mu.Lock()
+			st.bridge = bridge
+			m.mu.Unlock()
+			m.emit(id, sslcon.Event{
+				Type:    sslcon.EventConnected,
+				Message: fmt.Sprintf("SOCKS5-прокси слушает на %s", bridge.Addr()),
+			})
+			return nil
 		}
-		close(st.events)
-	}()
+	}
+	st.client = client
 	m.mu.Unlock()
 
 	if err := client.Connect(ctx); err != nil {
 		m.mu.Lock()
 		st.client = nil
-		st.events = nil
 		m.mu.Unlock()
 		return fmt.Errorf("запуск туннеля %q: %w", id, err)
 	}
@@ -135,8 +163,13 @@ func (m *Manager) Stop(id string) error {
 		return fmt.Errorf("туннель %q не зарегистрирован", id)
 	}
 	client := st.client
+	bridge := st.bridge
+	st.bridge = nil
 	m.mu.Unlock()
 
+	if bridge != nil {
+		_ = bridge.Close() // сначала останавливаем SOCKS5-мост, затем туннель
+	}
 	if client == nil {
 		return nil // не запущен — нечего останавливать
 	}
@@ -171,8 +204,7 @@ func (m *Manager) Submit2FA(id, code string) error {
 	if client == nil {
 		return fmt.Errorf("туннель %q не запущен — 2FA-код некому передать", id)
 	}
-	client.Submit2FA(code)
-	return nil
+	return client.Submit2FA(code)
 }
 
 // Status возвращает состояние туннеля: подключён ли и режим работы.
@@ -206,11 +238,17 @@ func (m *Manager) forwardEvents(id string, client *sslcon.Client) {
 
 	// Канал клиента закрыт — процесс завершён, туннель можно запускать заново.
 	m.mu.Lock()
+	var bridge *socks5.Bridge
 	if st, ok := m.tunnels[id]; ok && st.client == client {
 		st.client = nil
 		st.connected = false
+		bridge = st.bridge
+		st.bridge = nil
 	}
 	m.mu.Unlock()
+	if bridge != nil {
+		_ = bridge.Close() // туннель завершился — SOCKS5-мост больше не нужен
+	}
 }
 
 // emit кладёт событие в агрегированный канал, не блокируясь при переполнении.
