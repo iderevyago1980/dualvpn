@@ -1,0 +1,11 @@
+#cloud-config
+# Провижн клиентской VM: смонтировать 9p-шару и запустить гостевой скрипт.
+# Вся логика теста — в provision-guest.sh на шаре (проще итерации без пересборки ISO).
+package_update: true
+packages:
+  - xvfb
+bootcmd:
+  - [ sh, -c, "mkdir -p /mnt/share" ]
+  - [ sh, -c, "mount -t 9p -o trans=virtio,version=9p2000.L share /mnt/share || true" ]
+runcmd:
+  - [ sh, -c, "bash /mnt/share/provision-guest.sh > /mnt/share/provision.log 2>&1" ]
