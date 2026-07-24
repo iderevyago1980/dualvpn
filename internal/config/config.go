@@ -27,6 +27,7 @@ type Tunnel struct {
 	Routes    []string `toml:"routes"`     // Подсети для split-tunneling (CIDR)
 	Username  string   `toml:"username"`   // Логин VPN (может быть пустым — запросим интерактивно)
 	Password  string   `toml:"password"`   // Пароль VPN (может быть пустым — запросим интерактивно)
+	ProbeURL  string   `toml:"probe_url"`  // URL внутри VPN для проверки связности на стенде (E2E)
 }
 
 // Config — корневая структура конфигурационного файла.
