@@ -17,7 +17,7 @@ DEB_ARCH := amd64
 DEB_ROOT := $(BINDIR)/deb/dualvpn_$(VERSION)_$(DEB_ARCH)
 DEB_PKG  := $(BINDIR)/dualvpn_$(VERSION)_$(DEB_ARCH).deb
 
-.PHONY: build-linux build-windows build-all installer deb test clean dev build
+.PHONY: build-linux build-windows build-all installer deb test clean dev build e2e
 
 # Linux-бинарник (нужны libwebkit2gtk-4.1-dev и libayatana-appindicator3-dev).
 build-linux:
@@ -55,6 +55,11 @@ deb: build-linux
 
 test:
 	$(GO) test ./internal/... -v
+
+# E2E host-стенд: ocserv (docker) + харнесс dualvpn-harness (SOCKS5, затем TUN
+# через sudo) + curl-проверка изоляции. См. test/e2e/run.sh.
+e2e: ## E2E host-стенд: ocserv + харнесс (SOCKS5 + TUN)
+	@test/e2e/run.sh
 
 clean:
 	rm -rf $(BINDIR)/
