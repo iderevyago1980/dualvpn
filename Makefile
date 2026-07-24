@@ -4,14 +4,16 @@
 # Windows-бинарник собирается кросс-компиляцией без cgo (Wails на Windows
 # использует чистый Go WebView2-загрузчик, systray — winapi).
 
-GO      ?= go
-WAILS   ?= wails
-BINDIR  := bin
+GO       ?= go
+WAILS    ?= wails
+MAKENSIS ?= makensis
+BINDIR   := bin
+VERSION  ?= 1.7.0
 
 LINUX_TAGS   := desktop,production,webkit2_41
 WINDOWS_TAGS := desktop,production
 
-.PHONY: build-linux build-windows build-all test clean dev build
+.PHONY: build-linux build-windows build-all installer test clean dev build
 
 # Linux-бинарник (нужны libwebkit2gtk-4.1-dev и libayatana-appindicator3-dev).
 build-linux:
@@ -23,6 +25,12 @@ build-windows:
 		-ldflags "-H=windowsgui -s -w" -o $(BINDIR)/DualVPN.exe
 
 build-all: build-linux build-windows
+
+# Windows-инсталлятор (NSIS). Кросс-собирается на Linux через makensis.
+# Требует свежий bin/DualVPN.exe (цель build-windows).
+# Результат: bin/DualVPN-Setup-$(VERSION).exe
+installer: build-windows
+	$(MAKENSIS) -DAPPVERSION=$(VERSION) -DSRCROOT=$(CURDIR) build/windows/installer.nsi
 
 test:
 	$(GO) test ./internal/... -v

@@ -33,6 +33,7 @@ type ClientConfig struct {
 	SecretKey          string
 	InsecureSkipVerify bool
 	Mode               string // ModeTUN (по умолчанию) или ModeSOCKS5
+	TunName            string // Имя TUN-интерфейса в режиме tun (напр. "dualvpn0")
 }
 
 // ErrNeeds2FA возвращается из PasswordAuth, когда сервер запросил второй
@@ -78,6 +79,7 @@ type Client struct {
 
 	// Поля для high-level API (совместимость с openconnect.Client).
 	mode    string        // ModeTUN или ModeSOCKS5
+	tunName string        // имя TUN-интерфейса (режим tun)
 	events  chan Event
 	twoFAOK chan struct{} // сигнал run(): Submit2FA успешно прошла
 	tunnel  *Tunnel
@@ -139,6 +141,7 @@ func NewClient(cfg ClientConfig) *Client {
 		Prof:               NewProfile(cfg.Host, cfg.Username, cfg.Password, cfg.Group, cfg.SecretKey),
 		insecureSkipVerify: cfg.InsecureSkipVerify,
 		mode:               mode,
+		tunName:            cfg.TunName,
 		twoFAOK:            make(chan struct{}, 1),
 		// Канал событий создаётся сразу: Manager.Start вызывает Events()
 		// из отдельной горутины одновременно с Connect() — ленивая
@@ -588,7 +591,7 @@ func (c *Client) run(ctx context.Context) {
 			_ = tunnel.Close()
 			return
 		}
-		if err := tunnel.SetupTUN(""); err != nil {
+		if err := tunnel.SetupTUN(c.tunName); err != nil {
 			c.emit(EventError, fmt.Sprintf("SetupTUN: %v", err))
 			return
 		}

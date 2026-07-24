@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/dtls/v2"
@@ -33,6 +34,7 @@ import (
 	"sslcon/proto"
 	"sslcon/utils"
 
+	"dualvpn/internal/routing"
 	tundev "dualvpn/internal/tun"
 )
 
@@ -315,11 +317,15 @@ func (t *Tunnel) PacketFlow() (<-chan []byte, chan<- []byte) {
 }
 
 // SetupTUN создаёт TUN-адаптер с именем name и адресом, выданным сервером,
-// и запускает перекачку пакетов между адаптером и туннелем. Только для
-// ModeTUN; настройка маршрутов — забота вызывающего (internal/routing).
+// запускает перекачку пакетов между адаптером и туннелем и добавляет маршруты
+// split-include через этот интерфейс. Только для ModeTUN. Пустое имя
+// заменяется на сгенерированное (dualvpnN) — иначе tun.Create отклонит адаптер.
 func (t *Tunnel) SetupTUN(name string) error {
 	if t.mode != ModeTUN {
 		return fmt.Errorf("sslcon: SetupTUN доступен только в режиме %q", ModeTUN)
+	}
+	if name == "" {
+		name = defaultTunName()
 	}
 	dev, err := tundev.Create(tundev.Config{
 		Name:    name,
@@ -334,7 +340,29 @@ func (t *Tunnel) SetupTUN(name string) error {
 
 	go t.tunToPayloadOut(dev, t.cSess) // пакеты приложений → туннель
 	go t.payloadInToTun(dev, t.cSess)  // туннель → приложения
+
+	t.applyRoutes(dev.Name) // best-effort: подсети split-include → этот TUN
 	return nil
+}
+
+// tunCounter обеспечивает уникальные имена интерфейсов для нескольких
+// туннелей при пустом name (dualvpn0, dualvpn1, ...).
+var tunCounter atomic.Uint32
+
+func defaultTunName() string {
+	return fmt.Sprintf("dualvpn%d", tunCounter.Add(1)-1)
+}
+
+// applyRoutes добавляет маршруты к подсетям, полученным от шлюза
+// (X-CSTP-Split-Include), через TUN-интерфейс iface. Ошибки не фатальны:
+// туннель уже поднят, о проблемах маршрутизации сообщаем в лог.
+func (t *Tunnel) applyRoutes(iface string) {
+	for _, r := range t.routes {
+		cidr := utils.IpMaskToCIDR(r.Network + "/" + r.Mask)
+		if err := routing.AddRoute(cidr, t.cSess.VPNAddress, iface); err != nil {
+			base.Error("не удалось добавить маршрут "+cidr+" через "+iface+":", err)
+		}
+	}
 }
 
 // tunToPayloadOut читает IP-пакеты из TUN-адаптера и кладёт их в
@@ -412,10 +440,22 @@ func (t *Tunnel) Close() error {
 		}
 		t.mu.Unlock()
 		if t.tunDev != nil {
+			t.removeRoutes(t.tunDev.Name) // снять маршруты до удаления интерфейса
 			_ = t.tunDev.Close()
 		}
 	})
 	return nil
+}
+
+// removeRoutes снимает маршруты split-include, добавленные applyRoutes.
+// Best-effort: ошибки не мешают закрытию туннеля.
+func (t *Tunnel) removeRoutes(iface string) {
+	for _, r := range t.routes {
+		cidr := utils.IpMaskToCIDR(r.Network + "/" + r.Mask)
+		if err := routing.DeleteRoute(cidr, t.cSess.VPNAddress, iface); err != nil {
+			base.Error("не удалось снять маршрут "+cidr+" через "+iface+":", err)
+		}
+	}
 }
 
 // tlsChannel читает STF-фреймы CSTP из TLS-соединения и раскладывает их в

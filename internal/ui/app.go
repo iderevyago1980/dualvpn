@@ -305,6 +305,7 @@ func (a *App) registerTunnels() {
 				Group:    t.Group,
 				Username: t.Username,
 				Password: t.Password,
+				TunName:  t.TunName,
 			},
 			Routes:    t.Routes,
 			Mode:      m,
