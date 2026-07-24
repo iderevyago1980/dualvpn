@@ -148,11 +148,18 @@ SAN (IP серверов); CA раскладывается в trust store гос
 
 ### 4. Клиентские VM
 
-**Linux** (`vm/linux/`): Ubuntu cloud image + cloud-init. Провижн: установка
-`dualvpn_*.deb` (проверка, что зависимости объявлены и пакет стартует), `xvfb`,
-harness-бинарь, `config.toml`, CA в `/usr/local/share/ca-certificates`. Прогон:
-harness `-mode tun`, harness `-mode socks5`, затем GUI-smoke `xvfb-run dualvpn` на
-N секунд (не падает → зависимости на месте).
+**Linux** (`vm/linux/`, реализуется отдельным планом): Ubuntu 24.04 cloud image +
+QEMU/KVM (под `sudo` — хост не в группе `kvm`). **Сеть — QEMU user-net (SLIRP), НЕ
+bridge/tap:** гость ходит на ocserv через `10.0.2.2:4443/4444` (`ClientConfig.Host`
+понимает `host:port`), трафик к inner-сетям идёт через сам туннель — прямой L2 к
+docker не нужен, лишний `sudo` для сети тоже. Провижн через **cloud-init (NoCloud
+ISO, собирается `xorriso`)** + **9p-шара** хостовой папки с артефактами (`.deb`,
+harness, `config.toml` с `10.0.2.2`, CA) и для вывода результатов — без SSH и без
+пересборки образа. Внутри (cloud-init как root): `apt install ./dualvpn_*.deb`
+(проверка объявленных зависимостей на чистой системе), harness `-mode socks5` и
+`-mode tun` (реальный TUN + split-маршруты), GUI-smoke `xvfb-run dualvpn` N секунд
+(не падает → зависимости на месте); результат пишется в 9p-шару, VM гасится
+(`poweroff`), хост читает файл результата. Полностью автоматически.
 
 **Windows** (`vm/windows/`): QEMU + Windows Eval ISO, **полностью автоматически**
 через `autounattend.xml` (+ virtio-драйверы для диска/сети). Провижн: NSIS-инсталлятор
