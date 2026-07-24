@@ -24,3 +24,9 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
+for i in $(seq 1 30); do
+  if openssl s_client -connect 127.0.0.1:4444 -servername localhost </dev/null 2>/dev/null | grep -q CONNECTED; then
+    echo "ocserv-b отвечает на :4444"; break
+  fi
+  sleep 1
+done
