@@ -148,11 +148,18 @@ SAN (IP серверов); CA раскладывается в trust store гос
 
 ### 4. Клиентские VM
 
-**Linux** (`vm/linux/`): Ubuntu cloud image + cloud-init. Провижн: установка
-`dualvpn_*.deb` (проверка, что зависимости объявлены и пакет стартует), `xvfb`,
-harness-бинарь, `config.toml`, CA в `/usr/local/share/ca-certificates`. Прогон:
-harness `-mode tun`, harness `-mode socks5`, затем GUI-smoke `xvfb-run dualvpn` на
-N секунд (не падает → зависимости на месте).
+**Linux** (`vm/linux/`, реализуется отдельным планом): Ubuntu 24.04 cloud image +
+QEMU/KVM (под `sudo` — хост не в группе `kvm`). **Сеть — QEMU user-net (SLIRP), НЕ
+bridge/tap:** гость ходит на ocserv через `10.0.2.2:4443/4444` (`ClientConfig.Host`
+понимает `host:port`), трафик к inner-сетям идёт через сам туннель — прямой L2 к
+docker не нужен, лишний `sudo` для сети тоже. Провижн через **cloud-init (NoCloud
+ISO, собирается `xorriso`)** + **9p-шара** хостовой папки с артефактами (`.deb`,
+harness, `config.toml` с `10.0.2.2`, CA) и для вывода результатов — без SSH и без
+пересборки образа. Внутри (cloud-init как root): `apt install ./dualvpn_*.deb`
+(проверка объявленных зависимостей на чистой системе), harness `-mode socks5` и
+`-mode tun` (реальный TUN + split-маршруты), GUI-smoke `xvfb-run dualvpn` N секунд
+(не падает → зависимости на месте); результат пишется в 9p-шару, VM гасится
+(`poweroff`), хост читает файл результата. Полностью автоматически.
 
 **Windows** (`vm/windows/`): QEMU + Windows Eval ISO, **полностью автоматически**
 через `autounattend.xml` (+ virtio-драйверы для диска/сети). Провижн: NSIS-инсталлятор
@@ -259,6 +266,54 @@ NAT.** Auth/CSTP работали, но данные до inner-host не дох
 сам NAT не поднимает. Устранено на стенде: в образ добавлен `iptables`, `up.sh`
 ставит `MASQUERADE` для `10.90.0.0/24` и `10.91.0.0/24`. Это конфигурация стенда,
 не изменение клиента.
+
+**Task 3, 2026-07-24: `make e2e-vm` (реальная Linux-VM, QEMU/KVM user-net) —
+PASS по ядру, находка в GUI-smoke.** Полный автоматический прогон:
+`prepare.sh` → QEMU (`sudo`, `-enable-kvm`, user-net, 9p-шара, cloud-init) →
+`provision-guest.sh` в госте → `poweroff` → хост читает `result.txt`. Все три
+ключевые точки проверки подтверждены эмпирически:
+
+- 9p-шара монтируется в госте (`mount -t 9p ... share` из `bootcmd` cloud-init
+  отработал без ошибок, `provision-guest.sh` и артефакты видны в `/mnt/share`);
+- гость реально достаёт ocserv через `10.0.2.2:4443/4444` по user-net (harness
+  SOCKS5 и TUN оба дали `exit 0`, включая связность до inner-хостов и изоляцию
+  A↛B/B↛A — то же покрытие, что и в host-стенде `make e2e`);
+- `.deb` тянет зависимости из архива Ubuntu по user-net на чистом образе
+  (`apt-get install ./dualvpn_*.deb` разрешил полный граф зависимостей —
+  webkit2gtk-4.1, gtk3, libayatana-appindicator3 и т.д. — без ручной подкрутки
+  источников).
+
+Результат гостя (`result.txt`):
+```
+[14:53:14] === установка .deb (проверка зависимостей на чистой системе) ===
+[14:54:02] PASS: .deb установлен, зависимости разрешены
+[14:54:02] === harness SOCKS5 (без root-специфики) ===
+[14:54:15] SOCKS5 exit=0
+[14:54:15] === harness TUN (root, реальные маршруты) ===
+[14:54:15] TUN exit=0
+[14:54:15] === GUI-smoke (xvfb-run dualvpn N сек) ===
+[14:54:23] FAIL: GUI упал за 8с (exit=2, см. gui.log)
+[14:54:23] === ИТОГ: deb=0 socks=0 tun=0 gui=1 → провалов=1 ===
+OVERALL_EXIT=1
+```
+
+Единственный провал — GUI-smoke (`exit=1` из четырёх шагов), причина точно
+локализована по `gui.log`: `dualvpn` падает `SIGABRT` внутри cgo-вызова
+`github.com/getlantern/systray._Cfunc_nativeLoop` (трей-иконка), которому
+предшествуют предупреждения `Unable to get the session bus: Failed to execute
+child process "dbus-launch" (No such file or directory)` от
+`libayatana-appindicator`/`libdbusmenu-glib`. Причина — в минимальном cloud-image
++ `xvfb-run` нет ни `dbus-launch`, ни вообще работающей сессионной шины/трей-хоста
+(StatusNotifierWatcher), которых требует системный трей; это ожидаемо в headless
+Xvfb без окружения рабочего стола и не относится к оркестрации VM или к ядру
+DualVPN (auth/CSTP/маршруты/изоляция все отработали штатно). Возможные пути на
+будущее (вне рамок Task 3): поставить `dbus-x11`/`at-spi-bus-launcher` в пакеты
+cloud-init и оборачивать GUI-smoke в `dbus-run-session`, либо сделать трей
+DualVPN устойчивым к отсутствию шины (не паниковать, а деградировать без иконки).
+
+`make e2e-vm` завершился `exit 1` (по `OVERALL_EXIT=1` из гостя) — корректно
+пробросил код через `run.sh`. Ядро стенда (`make e2e`, milestone-тесты) от
+VM-слоя не зависит и не затронуто.
 
 ## Оценка надёжности
 
