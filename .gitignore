@@ -6,3 +6,6 @@ bin/
 test/e2e/backends/ocserv/certs/
 test/e2e/backends/ocserv/passwd
 bin/dualvpn-harness
+
+# E2E Linux-VM: скачиваемые/генерируемые артефакты
+test/e2e/vm/linux/work/
