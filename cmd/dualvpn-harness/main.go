@@ -76,7 +76,65 @@ func main() {
 		log.Printf("PASS [%s] %s -> 200; тело: %.80s", t.Name, t.ProbeURL, body)
 	}
 	_ = ids
+
+	// Кросс-проверка изоляции: пока мосты живы (процесс ещё не завершился),
+	// SOCKS5-порт каждого туннеля не должен доставать до сети другого —
+	// зеркалит проверку из test/e2e/mockasa_e2e_test.go. Постфактум-curl
+	// в run.sh бил по уже закрытому порту после выхода процесса, поэтому
+	// проверка перенесена сюда, где gVisor-мосты ещё подняты.
+	if mode == sslcon.ModeSOCKS5 {
+		failures += checkIsolation(cfg.Tunnels, log.Printf)
+	}
+
 	if failures > 0 {
 		os.Exit(failures)
 	}
+}
+
+// checkIsolation проверяет, что SOCKS5-порт каждого туннеля не достаёт до
+// probe_url другого туннеля. Успешный (200, без ошибки) ответ через чужой
+// туннель — нарушение изоляции и засчитывается как failure немедленно;
+// пара коротких повторов нужна только чтобы не словить ложный proval из-за
+// старта моста, а не для того, чтобы "дожидаться" пробоя.
+func checkIsolation(tunnels []config.Tunnel, logf func(string, ...any)) int {
+	failures := 0
+	for i, ti := range tunnels {
+		if ti.ProbeURL == "" || ti.SocksPort == 0 {
+			continue
+		}
+		for j, tj := range tunnels {
+			if i == j || tj.ProbeURL == "" {
+				continue
+			}
+			client, err := checks.SocksClient(fmt.Sprintf("127.0.0.1:%d", ti.SocksPort), 3*time.Second)
+			if err != nil {
+				logf("[isolation] socks-клиент %s: %v", ti.Name, err)
+				failures++
+				continue
+			}
+
+			breach := false
+			var lastErr error
+			var lastStatus int
+			for attempt := 0; attempt < 2; attempt++ {
+				status, _, err := checks.GetBody(client, tj.ProbeURL)
+				lastStatus, lastErr = status, err
+				if err == nil && status == 200 {
+					breach = true
+					break
+				}
+				if attempt == 0 {
+					time.Sleep(300 * time.Millisecond)
+				}
+			}
+
+			if breach {
+				logf("FAIL [isolation] туннель %s достиг сети %s", ti.Name, tj.Name)
+				failures++
+			} else {
+				logf("PASS [isolation] сеть %s недоступна через туннель %s (status=%d err=%v)", tj.Name, ti.Name, lastStatus, lastErr)
+			}
+		}
+	}
+	return failures
 }
