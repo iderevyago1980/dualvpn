@@ -2,13 +2,13 @@
 //
 // В TUN-режиме каждый туннель получает собственный интерфейс (dualvpn0,
 // dualvpn1, ...), через который маршрутизируются подсети из конфигурации.
-// Linux: /dev/net/tun + ioctl TUNSETIFF; Windows: wintun.dll (заглушка).
+// Linux: /dev/net/tun + ioctl TUNSETIFF; Windows: драйвер Wintun (wintun.dll).
 package tun
 
 import (
 	"fmt"
+	"io"
 	"net"
-	"os"
 )
 
 // Config — параметры создаваемого TUN-адаптера.
@@ -47,36 +47,36 @@ func ParseAddress(addr string) (net.IP, error) {
 	return nil, fmt.Errorf("адрес %q не является IPv4", addr)
 }
 
-// Device — открытый TUN-адаптер.
+// Device — открытый TUN-адаптер. Платформенная реализация ввода-вывода
+// (Linux: /dev/net/tun; Windows: wintun-сессия) скрыта за io.ReadWriteCloser,
+// который конструирует Create в соответствующем платформенном файле.
 type Device struct {
-	Name string   // Фактическое имя интерфейса, присвоенное ядром
-	fd   int      // Файловый дескриптор /dev/net/tun
-	file *os.File // Обёртка над fd для Read/Write
+	Name string // Фактическое имя интерфейса
+	io   io.ReadWriteCloser
 }
 
-// Close закрывает TUN-адаптер (интерфейс удаляется ядром).
+// Close закрывает TUN-адаптер (интерфейс удаляется ОС).
 func (d *Device) Close() error {
-	if d == nil || d.file == nil {
+	if d == nil || d.io == nil {
 		return nil
 	}
-	err := d.file.Close()
-	d.file = nil
-	d.fd = -1
+	err := d.io.Close()
+	d.io = nil
 	return err
 }
 
 // Read читает один IP-пакет из TUN-интерфейса.
 func (d *Device) Read(p []byte) (n int, err error) {
-	if d == nil || d.file == nil {
+	if d == nil || d.io == nil {
 		return 0, fmt.Errorf("TUN-устройство не открыто")
 	}
-	return d.file.Read(p)
+	return d.io.Read(p)
 }
 
 // Write записывает один IP-пакет в TUN-интерфейс.
 func (d *Device) Write(p []byte) (n int, err error) {
-	if d == nil || d.file == nil {
+	if d == nil || d.io == nil {
 		return 0, fmt.Errorf("TUN-устройство не открыто")
 	}
-	return d.file.Write(p)
+	return d.io.Write(p)
 }

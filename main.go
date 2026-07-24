@@ -8,11 +8,13 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
+	"dualvpn/internal/config"
 	"dualvpn/internal/ui"
 )
 
@@ -22,7 +24,7 @@ import (
 var assets embed.FS
 
 func main() {
-	app, err := ui.NewApp("config.toml")
+	app, err := ui.NewApp(configPath())
 	if err != nil {
 		log.Fatalf("инициализация: %v", err)
 	}
@@ -47,4 +49,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("wails: %v", err)
 	}
+}
+
+// configPath выбирает путь к конфигу с приоритетами:
+//  1. переменная окружения DUALVPN_CONFIG (явное переопределение);
+//  2. локальный config.toml в рабочем каталоге, если он есть (удобно при
+//     разработке — `go run .` из корня репозитория);
+//  3. пользовательский каталог настроек ОС (~/.config/dualvpn/config.toml).
+//
+// Пункт 3 критичен для установленного пакета: при запуске из меню рабочий
+// каталог — «/» или домашний, и относительный путь писать было бы некуда.
+func configPath() string {
+	if p := os.Getenv("DUALVPN_CONFIG"); p != "" {
+		return p
+	}
+	if _, err := os.Stat("config.toml"); err == nil {
+		return "config.toml"
+	}
+	if p, err := config.DefaultPath(); err == nil {
+		return p
+	}
+	return "config.toml"
 }
