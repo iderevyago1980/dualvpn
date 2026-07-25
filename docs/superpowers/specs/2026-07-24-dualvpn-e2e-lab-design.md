@@ -367,6 +367,19 @@ Linux-хосте нет, а ручная правка BCD-hive (`hivexsh`) — �
 Итог: пройдена вся цепочка кроме регенерации BCD; для живого прогона на Windows
 остаётся Server 2022 (BIOS) как прагматичный путь.
 
+**Финальная диагностика BCD (python-hivex, отвергает гипотезу «BCD-mismatch»).**
+Разобрали BCD носителя (`\efi\microsoft\boot\bcd`): `{ramdiskoptions}.ramdisksdidevice`
+= тип `0x05` (**BootDevice = `[boot]`**), `ramdisksdipath` = `\boot\boot.sdi`;
+Setup-загрузчик `{7619dcc9}` (`path=\windows\system32\boot\winload.efi`) имеет
+device = ramdisk (тип 3) с родителем тип `0x05` (`[boot]`) и путём `\sources\boot.wim`.
+**Все ссылки — `[boot]` (относительно загрузочного устройства), как на штатной
+загрузочной USB.** То есть носитель собран корректно и BCD-правка НЕ помогла бы:
+`bootmgfw.efi` молча возвращается (скриншот VNC — только OVMF/TianoCore-сплэш, без
+экрана ошибки Windows) при полностью валидных BCD и файлах. Вывод: блокер —
+**несовместимость данной OVMF-сборки (EDK II UEFI 2.70) с этим `bootmgfw`**, а не
+дефект носителя/BCD. Media-side фиксы исчерпаны; нужен другой firmware-билд/машина
+с рабочим UEFI, либо Server 2022 (BIOS).
+
 ## Оценка надёжности
 
 - 🟢 Надёжно/быстро: ocserv-контейнеры, mockasa-бэкенд, Linux-harness, проверки.
