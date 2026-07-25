@@ -1,19 +1,24 @@
 @echo -off
-echo DualVPN: UEFI startup — chainload Windows...
-rem Windows уже установлен на диск -> его загрузчик.
-for %d in fs0 fs1 fs2 fs3 fs4 fs5 fs6 fs7
-  if exist %d:\EFI\Microsoft\Boot\bootmgfw.efi then
-    echo boot installed Windows from %d:
-    %d:\EFI\Microsoft\Boot\bootmgfw.efi
+echo DualVPN: UEFI startup
+for %g in fs0 fs1 fs2 fs3 fs4 fs5
+  if exist %g:\dvtried.flag then
+    echo already tried once, dropping to shell
+    goto DONE
   endif
 endfor
-rem иначе установочный носитель (boot.wim на CD).
-for %v in fs0 fs1 fs2 fs3 fs4 fs5 fs6 fs7
+for %v in fs0 fs1 fs2 fs3 fs4 fs5
   if exist %v:\sources\boot.wim then
-    echo boot Windows Setup from %v:
-    %v:\efi\boot\bootx64.efi
+    if exist %v:\efi\boot\bootx64.efi then
+      for %r in fs0 fs1 fs2 fs3 fs4 fs5
+        if exist %r:\RESULTDISK.marker then
+          echo tried > %r:\dvtried.flag
+        endif
+      endfor
+      echo add boot entry for Windows Setup on %v: and reset
+      bcfg boot add 0 %v:\efi\boot\bootx64.efi "Windows Setup"
+      reset
+    endif
   endif
 endfor
-rem Без reset — не зацикливаемся. Если сюда дошли, firmware не смог загрузить
-rem установочный носитель (см. «Журнал расхождений» в спеке про OVMF+Win11 ISO).
-echo no bootable Windows loader could be launched from shell
+:DONE
+echo startup.nsh finished

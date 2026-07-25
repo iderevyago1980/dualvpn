@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # E2E внутри настоящей Windows 11 Pro VM: ocserv (docker) + QEMU/KVM(OVMF) гость.
+# Загрузка с FAT32 install-media (как UEFI-флешка): OVMF грузит \EFI\BOOT\BOOTX64.EFI,
+# bootmgfw находит boot.wim/install.swm на своём FAT-томе (обход El-Torito/BCD-блокера).
 # Автоустановка через autounattend (обход TPM/SecureBoot), harness socks5+tun, GUI-smoke.
 set -uo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd ../../../.. && pwd)"
 OCS="$ROOT/test/e2e/backends/ocserv"
 WORK="$(pwd)/work"
-WIN_ISO="${WIN_ISO:-/mnt/Data-2/Distr/Microsoft Windows 11 [10.0.26100.8457], Version 24H2 (Updated May 2026) - Оригинальные образы от Microsoft MSDN [Ru]/ru-ru_windows_11_consumer_editions_version_24h2_updated_may_2026_x64_dvd_d061a709.iso}"
-BOOT_TIMEOUT="${BOOT_TIMEOUT:-3300}"   # ~55 мин на установку+провижн
-MON="$WORK/mon.sock"
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-3600}"   # ~60 мин на установку+провижн
 export PATH="/usr/local/go/bin:$PATH"
 
 cleanup() {
@@ -17,45 +17,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ -f "$WIN_ISO" ]] || { echo "нет Windows ISO: $WIN_ISO (задай WIN_ISO=...)" >&2; exit 1; }
-
-echo "==> подготовка артефактов Windows-VM"
+echo "==> подготовка артефактов (data-ISO, result, qcow2, OVMF vars)"
 ./prepare-win.sh
-
-# Симлинк на ISO с простым именем: в оригинальном пути есть запятая/пробелы,
-# а QEMU -drive file= разбивает опции по запятым — путь бы обрезался.
-WIN_LINK="$WORK/win-install.iso"
-ln -sf "$WIN_ISO" "$WIN_LINK"
+echo "==> сборка загрузочного install-media (FAT32 + split WIM)"
+./build-install-media.sh
 echo "==> ocserv up"; "$OCS/up.sh" >/dev/null
 
-# Снятие блокера UEFI "Press any key to boot from CD": шлём Enter в монитор
-# первые ~150с, пока не начнётся автоустановка. socat подключается к unix-сокету.
-rm -f "$MON"
-sendkeys() {
-  for _ in $(seq 1 75); do
-    [[ -S "$MON" ]] && printf 'sendkey ret\n' | socat - "UNIX-CONNECT:$MON" 2>/dev/null
-    sleep 2
-  done
-}
-
 echo "==> запуск QEMU(OVMF, q35, AHCI, e1000); установка Win11 + провижн (до ${BOOT_TIMEOUT}s)"
-sendkeys &
-SK_PID=$!
+# win.qcow2 на ahci.0 = Disk 0 (цель autounattend), bootindex=1.
+# wininstall.img на ahci.1 = boot-media, bootindex=0 (грузится первым).
 sudo timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
   -enable-kvm -machine q35 -m 4096 -smp 4 -display none \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
   -drive if=pflash,format=raw,file="$WORK/OVMF_VARS.fd" \
-  -cdrom "$WIN_LINK" \
+  -device ich9-ahci,id=ahci \
   -drive file="$WORK/win.qcow2",if=none,id=disk0,format=qcow2 \
-  -device ich9-ahci,id=ahci -device ide-hd,drive=disk0,bus=ahci.0 \
+  -device ide-hd,drive=disk0,bus=ahci.0,bootindex=1 \
+  -drive file="$WORK/wininstall.img",if=none,id=inst,format=raw \
+  -device ide-hd,drive=inst,bus=ahci.1,bootindex=0 \
   -drive file="$WORK/data.iso",if=none,id=datacd,format=raw,media=cdrom,readonly=on \
-  -device ide-cd,drive=datacd,bus=ahci.1 \
+  -device ide-cd,drive=datacd,bus=ahci.2 \
   -drive file="$WORK/result.img",if=none,id=resdisk,format=raw \
-  -device ide-hd,drive=resdisk,bus=ahci.2 \
+  -device ide-hd,drive=resdisk,bus=ahci.3 \
   -netdev user,id=n0 -device e1000,netdev=n0 \
-  -monitor "unix:$MON,server,nowait" \
-  -serial file:"$WORK/console.log" || true
-kill "$SK_PID" 2>/dev/null || true
+  -serial file:"$WORK/console.log" -monitor none || true
 
 echo "==> читаю результат с FAT-диска"
 MNT="$WORK/rmnt"; mkdir -p "$MNT"
