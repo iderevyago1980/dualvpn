@@ -45,14 +45,13 @@ sudo timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
   -enable-kvm -machine q35 -m 4096 -smp 4 -display none \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
   -drive if=pflash,format=raw,file="$WORK/OVMF_VARS.fd" \
+  -cdrom "$WIN_LINK" \
   -drive file="$WORK/win.qcow2",if=none,id=disk0,format=qcow2 \
-  -device ich9-ahci,id=ahci -device ide-hd,drive=disk0,bus=ahci.0,bootindex=1 \
-  -drive file="$WIN_LINK",if=none,id=wincd,format=raw,media=cdrom,readonly=on \
-  -device ide-cd,drive=wincd,bus=ahci.1,bootindex=2 \
+  -device ich9-ahci,id=ahci -device ide-hd,drive=disk0,bus=ahci.0 \
   -drive file="$WORK/data.iso",if=none,id=datacd,format=raw,media=cdrom,readonly=on \
-  -device ide-cd,drive=datacd,bus=ahci.2 \
+  -device ide-cd,drive=datacd,bus=ahci.1 \
   -drive file="$WORK/result.img",if=none,id=resdisk,format=raw \
-  -device ide-hd,drive=resdisk,bus=ahci.3 \
+  -device ide-hd,drive=resdisk,bus=ahci.2 \
   -netdev user,id=n0 -device e1000,netdev=n0 \
   -monitor "unix:$MON,server,nowait" \
   -serial file:"$WORK/console.log" || true
