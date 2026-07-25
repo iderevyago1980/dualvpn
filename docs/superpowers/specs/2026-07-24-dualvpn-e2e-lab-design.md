@@ -327,6 +327,30 @@ xvfb-run ./bin/dualvpn-linux` раньше падал `SIGABRT`, теперь ж
 (лог «трей: окружение не поддерживает системный трей — пропускаю»). Покрыто
 `internal/ui/tray_test.go` (`TestHasSessionBus`).
 
+**Windows 11 VM (2026-07-24…25): слой написан, живой boot заблокирован firmware.**
+`test/e2e/vm/windows/` + `make e2e-win-vm` полностью реализованы (autounattend Win11
+Pro с GPT + LabConfig-обходом TPM/SecureBoot; provision.ps1: harness socks5+tun +
+GUI-smoke; data-ISO с бинарями/wintun.dll; FAT-диск результата; OVMF q35; AHCI+e1000
+без virtio; ISO-симлинк из-за запятой в пути; startup.nsh). Целевой ISO —
+Win11 Pro Ru 24H2 (`/mnt/Data-2/Distr/...consumer...x64_dvd_d061a709.iso`, index 4).
+**8 итераций живой отладки** дали твёрдый диагноз: **OVMF в этом окружении не может
+загрузить установочный носитель Win11**. Из `console.log`:
+`BdsDxe: failed to load Boot0001 "UEFI QEMU DVD-ROM" ... : Not Found` — собственная
+boot-запись прошивки для DVD не находит EFI-загрузчик на носителе; а `bootmgfw.efi`,
+запущенный из UEFI-шелла напрямую или как `bcfg`-boot-запись, стартует (виден смен
+видеорежима) и **возвращается**, не найдя `\sources\boot.wim` (BCD установочного
+носителя ссылается на устройство по сигнатуре, которая при не-firmware-загрузке не
+совпадает). Пробовали: bootindex на своём и встроенном q35-SATA, `-cdrom`, chainload
+`cdboot_noprompt.efi`/`bootx64.efi`, `bcfg boot add`+`reset` (упирается в reset-цикл,
+т.к. ни одна запись не грузится). `startup.nsh` **автозапускается** только в
+`-cdrom`-конфиге — этот механизм рабочий; блокер именно в невозможности прошивки
+поднять загрузчик Windows-установки. Это не дефект DualVPN/теста и не тюнингуемая
+мелочь: нужен другой OVMF/edk2-билд, standalone `Shell.efi` (в системе нет), `swtpm`,
+либо инструмент типа Ventoy — вне разумных рамок. Прагматичная альтернатива для
+живого зелёного прогона на Windows — **Windows Server 2022 (BIOS/SeaBIOS)**:
+`SERVER_EVAL_x64FRE_en-us.iso` есть, BIOS `-boot once=d` надёжно грузит CD, обходя
+весь UEFI-блокер (не Win11-клиент, но настоящий Windows).
+
 ## Оценка надёжности
 
 - 🟢 Надёжно/быстро: ocserv-контейнеры, mockasa-бэкенд, Linux-harness, проверки.
