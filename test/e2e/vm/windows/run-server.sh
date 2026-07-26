@@ -35,11 +35,15 @@ rm -f "$FLOPPY"; mkfs.vfat -C "$FLOPPY" 1440 >/dev/null
 MNTF="$WORK/fmnt"; mkdir -p "$MNTF"; if mountpoint -q "$MNTF"; then sudo umount "$MNTF"; fi
 sudo mount -o loop "$FLOPPY" "$MNTF"; sudo cp autounattend-server.xml "$MNTF/autounattend.xml"; sudo umount "$MNTF"
 
-echo "==> FAT-диск: harness/provision/config + маркер результата"
+echo "==> data-CD: provision + harness + config (всегда доступен с буквой)"
+cp provision.ps1 "$STAGE/"
+xorriso -as mkisofs -output "$WORK/data-srv.iso" -volid DUALVPN -joliet -rock "$STAGE"/ >/dev/null 2>&1
+
+echo "==> FAT-диск результата (только маркер; provision включит его online)"
 rm -f "$FATDISK"; truncate -s 128M "$FATDISK"; mkfs.vfat -n RESULT "$FATDISK" >/dev/null
 MNT="$WORK/rmnt"; mkdir -p "$MNT"; if mountpoint -q "$MNT"; then sudo umount "$MNT"; fi
 sudo mount -o loop "$FATDISK" "$MNT"
-sudo cp "$STAGE"/* "$MNT/"; echo "result-disk" | sudo tee "$MNT/RESULTDISK.marker" >/dev/null
+echo "result-disk" | sudo tee "$MNT/RESULTDISK.marker" >/dev/null
 sudo umount "$MNT"
 
 rm -f "$WORK/srv.qcow2"; qemu-img create -f qcow2 "$WORK/srv.qcow2" 32G >/dev/null
@@ -56,6 +60,7 @@ sudo timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
   -drive file="$WORK/srv.qcow2",format=qcow2,if=ide,index=0,media=disk \
   -drive file="$FATDISK",format=raw,if=ide,index=1,media=disk \
   -drive file="$WIN_ISO",format=raw,if=ide,index=2,media=cdrom,readonly=on \
+  -drive file="$WORK/data-srv.iso",format=raw,if=ide,index=3,media=cdrom,readonly=on \
   -drive file="$FLOPPY",format=raw,if=floppy \
   -netdev user,id=n0 -device e1000,netdev=n0 \
   -boot once=d,menu=off \
