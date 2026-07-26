@@ -6,7 +6,15 @@ function Find-Drive($marker) {
   foreach ($d in 68..90) { $l = [char]$d; if (Test-Path ("${l}:\$marker")) { return "${l}:" } }
   return $null
 }
-$art = Find-Drive "provision.ps1"          # CD с артефактами
+# Вторичные диски Windows Server по умолчанию OFFLINE — включаем их, чтобы
+# FAT-диск результата получил букву (иначе provision не сможет записать result).
+try {
+  Get-Disk | Where-Object { $_.IsOffline } | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
+  Get-Disk | Where-Object { $_.IsReadOnly } | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 4
+} catch {}
+
+$art = Find-Drive "dualvpn-harness.exe"    # CD с артефактами (harness/provision)
 $res = Find-Drive "RESULTDISK.marker"      # FAT-диск результата
 if (-not $res) { $res = "R:" }
 $result = "$res\result.txt"
