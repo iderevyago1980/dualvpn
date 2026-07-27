@@ -14,6 +14,7 @@ rm -f "$STAGE"/* 2>/dev/null || true
 echo "==> сборка Windows-бинарей"
 ( cd "$ROOT" && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$STAGE/dualvpn-harness.exe" ./cmd/dualvpn-harness/ )
 ( cd "$ROOT" && GOFLAGS="-tags=webkit2_41" make build-windows >/dev/null && cp bin/DualVPN.exe "$STAGE/" ) || echo "WARN: DualVPN.exe не собран (GUI-smoke пропустится)"
+[[ -f "$ROOT/build/windows/deps/wintun.dll" ]] || "$ROOT/build/windows/fetch-wintun.sh"
 cp "$ROOT/build/windows/deps/wintun.dll" "$STAGE/"
 cp autounattend.xml provision.ps1 config.toml "$STAGE/"
 

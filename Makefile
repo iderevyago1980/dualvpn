@@ -33,7 +33,11 @@ build-all: build-linux build-windows
 # Windows-инсталлятор (NSIS). Кросс-собирается на Linux через makensis.
 # Требует свежий bin/DualVPN.exe (цель build-windows).
 # Результат: bin/DualVPN-Setup-$(VERSION).exe
-installer: build-windows
+.PHONY: wintun
+wintun: ## Скачать Wintun (wintun.dll) из релиза — бинарь не коммитится
+	@build/windows/fetch-wintun.sh
+
+installer: build-windows wintun
 	$(MAKENSIS) -DAPPVERSION=$(VERSION) -DSRCROOT=$(CURDIR) build/windows/installer.nsi
 
 # .deb-пакет для Debian/Ubuntu. Ключевое: секция Depends объявляет
