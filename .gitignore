@@ -12,3 +12,9 @@ test/e2e/vm/linux/work/
 
 # E2E Windows-VM: генерируемые артефакты
 test/e2e/vm/windows/work/
+
+# Бинарные артефакты — не коммитим (только исходники; wintun.dll оставлен как vendored dep)
+build/windows/deps/openconnect-gui.exe
+build/windows/deps/wintun.zip
+spikes/**/spike-*
+*.exe
