@@ -45,6 +45,7 @@ sudo mount -t ntfs-3g -o rw,remove_hiberfile "${NBD}p1" "$MNT"
 
 echo "==> кладу harness + провижн в C:\\dvlab"
 sudo mkdir -p "$MNT/dvlab"
+[[ -f "$ROOT/build/windows/deps/wintun.dll" ]] || "$ROOT/build/windows/fetch-wintun.sh"
 sudo cp "$WORK/dualvpn-harness.exe" "$ROOT/build/windows/deps/wintun.dll" config.toml run-harness.ps1 "$MNT/dvlab/"
 
 echo "==> правлю реестр: autologon + DisableCAD + RunOnce (python-hivex)"

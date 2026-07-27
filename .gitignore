@@ -18,3 +18,6 @@ build/windows/deps/openconnect-gui.exe
 build/windows/deps/wintun.zip
 spikes/**/spike-*
 *.exe
+# Wintun — тянется build/windows/fetch-wintun.sh, не коммитим
+build/windows/deps/wintun.dll
+build/windows/deps/wintun/
