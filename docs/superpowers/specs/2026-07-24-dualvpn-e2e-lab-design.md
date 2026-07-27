@@ -380,6 +380,24 @@ device = ramdisk (тип 3) с родителем тип `0x05` (`[boot]`) и п
 дефект носителя/BCD. Media-side фиксы исчерпаны; нужен другой firmware-билд/машина
 с рабочим UEFI, либо Server 2022 (BIOS).
 
+**✅ CONFIRMED (2026-07-27): DualVPN РАБОТАЕТ на Windows.** Пивот на Windows Server
+2022 (BIOS/SeaBIOS) + подход «готовый образ»: `run-server.sh` ставит Server 2022
+автономно один раз (ключевой фикс — для eval-ISO **без ProductKey**, иначе GVLK
+фильтрует редакции → «No images available»); затем **`run-ready.sh` / `make
+e2e-win-ready`** офлайн-инъектит harness в готовый `srv.qcow2` (qemu-nbd + ntfs-3g +
+python-hivex: autologon + **`DisableCAD=1`** — Server без этого ждёт Ctrl+Alt+Del и
+autologon не срабатывает — + RunOnce на `run-harness.ps1`) и загружает. Результат из
+реального Windows Server 2022 (`C:\dvlab\result.txt`, `OVERALL_EXIT=0`):
+- **SOCKS5:** `все туннели готовы: [a b]`; `PASS [a] 192.168.90.10 → 200`,
+  `PASS [b] 192.168.91.10 → 200`; `PASS [isolation] a↛b`, `PASS [isolation] b↛a`.
+- **TUN (Wintun-драйвер):** `все туннели готовы: [a b]`; `PASS [a] → 200`,
+  `PASS [b] → 200` (туннели получили `X-Cstp-Address 10.90.0.193` / `10.91.0.193`).
+
+Т.е. клиент на Windows поднимает два одновременных туннеля к ocserv, работает и в
+SOCKS5 (gVisor netstack), и в TUN (Wintun); связность обеих inner-сетей и изоляция
+подтверждены. `FirstLogonCommand`-путь (`run-win.sh`/`run-server.sh` автоустановка)
+остаётся флаки для авто-запуска harness — рабочий способ = готовый образ + RunOnce.
+
 ## Оценка надёжности
 
 - 🟢 Надёжно/быстро: ocserv-контейнеры, mockasa-бэкенд, Linux-harness, проверки.
