@@ -1,0 +1,24 @@
+[mode]
+  preferred = "socks5"
+
+[[tunnels]]
+  name = "a"
+  endpoint = "10.0.2.2:4443"
+  group = "LAB"
+  socks_port = 21080
+  tun_name = "dvlab0"
+  routes = ["192.168.90.0/24"]
+  username = "user"
+  password = "pass"
+  probe_url = "http://192.168.90.10/"
+
+[[tunnels]]
+  name = "b"
+  endpoint = "10.0.2.2:4444"
+  group = "LAB"
+  socks_port = 21081
+  tun_name = "dvlab1"
+  routes = ["192.168.91.0/24"]
+  username = "user"
+  password = "pass"
+  probe_url = "http://192.168.91.10/"
