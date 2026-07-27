@@ -78,3 +78,7 @@ dev:
 
 build:
 	$(WAILS) build -clean -platform windows/amd64
+
+.PHONY: e2e-win-ready
+e2e-win-ready: ## Подтверждение DualVPN на Windows через готовый образ (work/srv.qcow2 + harness offline-инъекция)
+	@test/e2e/vm/windows/run-ready.sh
