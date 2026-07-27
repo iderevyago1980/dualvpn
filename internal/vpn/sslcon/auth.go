@@ -188,6 +188,10 @@ func (c *Client) InitAuth() error {
 	if gps != 0 && !utils.InArray(dtd.Auth.Form.Groups, c.Prof.Group) {
 		return fmt.Errorf("available user groups are: %s", strings.Join(dtd.Auth.Form.Groups, " "))
 	}
+	// <group-select> отправляем только когда сервер реально предложил список
+	// групп. ocserv без select-group групп не предлагает и отвергает
+	// непрошеный group-select (реальный 401), поэтому там флаг остаётся false.
+	c.Prof.SendGroupSelect = gps != 0
 
 	c.Prof.Initialized = true
 	return nil
@@ -640,8 +644,8 @@ const templateAuthReply = `<?xml version="1.0" encoding="UTF-8"?>
         <username>{{.Username}}</username>
         <password>{{.Password}}</password>
     </auth>
-    <group-select>{{.Group}}</group-select>
-</config-auth>`
+{{if .SendGroupSelect}}    <group-select>{{.Group}}</group-select>
+{{end}}</config-auth>`
 
 // Ответ на challenge-форму 2FA: в <password> подставляется код второго
 // фактора (TOTP/SMS/push-код), как это делает официальный AnyConnect.
@@ -658,5 +662,5 @@ const template2FAReply = `<?xml version="1.0" encoding="UTF-8"?>
         <username>{{.Username}}</username>
         <password>{{.Code}}</password>
     </auth>
-    <group-select>{{.Group}}</group-select>
-</config-auth>`
+{{if .SendGroupSelect}}    <group-select>{{.Group}}</group-select>
+{{end}}</config-auth>`

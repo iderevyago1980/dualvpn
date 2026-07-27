@@ -8,7 +8,7 @@ GO       ?= go
 WAILS    ?= wails
 MAKENSIS ?= makensis
 BINDIR   := bin
-VERSION  ?= 1.7.0
+VERSION  ?= 1.8.0
 
 LINUX_TAGS   := desktop,production,webkit2_41
 WINDOWS_TAGS := desktop,production
@@ -17,7 +17,7 @@ DEB_ARCH := amd64
 DEB_ROOT := $(BINDIR)/deb/dualvpn_$(VERSION)_$(DEB_ARCH)
 DEB_PKG  := $(BINDIR)/dualvpn_$(VERSION)_$(DEB_ARCH).deb
 
-.PHONY: build-linux build-windows build-all installer deb test clean dev build
+.PHONY: build-linux build-windows build-all installer deb test clean dev build e2e
 
 # Linux-бинарник (нужны libwebkit2gtk-4.1-dev и libayatana-appindicator3-dev).
 build-linux:
@@ -33,7 +33,11 @@ build-all: build-linux build-windows
 # Windows-инсталлятор (NSIS). Кросс-собирается на Linux через makensis.
 # Требует свежий bin/DualVPN.exe (цель build-windows).
 # Результат: bin/DualVPN-Setup-$(VERSION).exe
-installer: build-windows
+.PHONY: wintun
+wintun: ## Скачать Wintun (wintun.dll) из релиза — бинарь не коммитится
+	@build/windows/fetch-wintun.sh
+
+installer: build-windows wintun
 	$(MAKENSIS) -DAPPVERSION=$(VERSION) -DSRCROOT=$(CURDIR) build/windows/installer.nsi
 
 # .deb-пакет для Debian/Ubuntu. Ключевое: секция Depends объявляет
@@ -56,6 +60,19 @@ deb: build-linux
 test:
 	$(GO) test ./internal/... -v
 
+# E2E host-стенд: ocserv (docker) + харнесс dualvpn-harness (SOCKS5, затем TUN
+# через sudo) + curl-проверка изоляции. См. test/e2e/run.sh.
+e2e: ## E2E host-стенд: ocserv + харнесс (SOCKS5 + TUN)
+	@test/e2e/run.sh
+
+.PHONY: e2e-vm
+e2e-vm: ## E2E внутри настоящей Linux-VM (ocserv + QEMU-гость: .deb, harness, GUI-smoke)
+	@test/e2e/vm/linux/run.sh
+
+.PHONY: e2e-win-vm
+e2e-win-vm: ## E2E внутри настоящей Windows 11 VM (autounattend + harness + GUI-smoke)
+	@test/e2e/vm/windows/run-win.sh
+
 clean:
 	rm -rf $(BINDIR)/
 
@@ -65,3 +82,7 @@ dev:
 
 build:
 	$(WAILS) build -clean -platform windows/amd64
+
+.PHONY: e2e-win-ready
+e2e-win-ready: ## Подтверждение DualVPN на Windows через готовый образ (work/srv.qcow2 + harness offline-инъекция)
+	@test/e2e/vm/windows/run-ready.sh

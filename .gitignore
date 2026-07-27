@@ -1,3 +1,23 @@
 dualvpn
 config.toml
 bin/
+
+# E2E-стенд: генерируемые артефакты
+test/e2e/backends/ocserv/certs/
+test/e2e/backends/ocserv/passwd
+bin/dualvpn-harness
+
+# E2E Linux-VM: скачиваемые/генерируемые артефакты
+test/e2e/vm/linux/work/
+
+# E2E Windows-VM: генерируемые артефакты
+test/e2e/vm/windows/work/
+
+# Бинарные артефакты — не коммитим (только исходники; wintun.dll оставлен как vendored dep)
+build/windows/deps/openconnect-gui.exe
+build/windows/deps/wintun.zip
+spikes/**/spike-*
+*.exe
+# Wintun — тянется build/windows/fetch-wintun.sh, не коммитим
+build/windows/deps/wintun.dll
+build/windows/deps/wintun/
