@@ -91,6 +91,35 @@ go build -tags desktop,production -ldflags "-H=windowsgui -s -w" -o bin/DualVPN.
 Device Guard»). Для разработки помогает `go run ./cmd/...`, для раздачи
 пользователям нужна подпись сертификатом.
 
+### Подпись сборок
+
+```powershell
+build\windows\sign.ps1 -CreateSelfSigned -ExportCer bin\DualVPN-selfsigned.cer  # первый раз
+build\windows\sign.ps1 -Thumbprint <отпечаток>                                  # дальше
+```
+
+signtool.exe из Windows SDK не нужен — подписывает встроенная
+`Set-AuthenticodeSignature`. Метка времени ставится всегда: без неё подпись
+перестаёт считаться действительной в день истечения сертификата.
+
+Релизы подписаны **самоподписанным** сертификатом
+(`CN=DualVPN (self-signed)`, отпечаток
+`A97246B76B693EADE8DA3B99193C37F680FB53CB`). Windows не знает этот корень,
+поэтому подпись считается действительной только там, где сертификат
+установлен вручную:
+
+```powershell
+Import-Certificate -FilePath .\DualVPN-selfsigned.cer -CertStoreLocation Cert:\CurrentUser\Root
+Import-Certificate -FilePath .\DualVPN-selfsigned.cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
+```
+
+Это осмысленно для развёртывания внутри организации (в т.ч. через GPO) и
+бесполезно для публичной раздачи: Smart App Control и SmartScreen смотрят на
+репутацию издателя, а не на факт наличия подписи, и блокируют файл даже с
+формально действительной подписью. Чтобы предупреждения исчезли у
+посторонних, нужен коммерческий OV/EV-сертификат (с 2023 — только с
+аппаратным токеном или облачным HSM) либо Azure Trusted Signing.
+
 ## Диагностика без GUI
 
 ```bash
