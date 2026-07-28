@@ -13,6 +13,12 @@ let App = null;
 let tunnels = [];
 /** Полная конфигурация (для сохранения Mode.Preferred). */
 let fullConfig = null;
+/**
+ * Слепок конфигурации, с которой работает бэкенд. Нужен, чтобы отличить
+ * правки формы от сохранённого состояния: подключение выполняется по
+ * сохранённой конфигурации, а не по тому, что набрано в полях.
+ */
+let savedSnapshot = '';
 /** Имя (ID) выбранного в сайдбаре туннеля. */
 let activeId = null;
 /** Текущий режим работы: tun | socks5. */
@@ -39,6 +45,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   try {
     fullConfig = await App.GetConfig();
     tunnels = await App.GetTunnels() || [];
+    savedSnapshot = formSnapshot(); // отправная точка: форма = конфиг бэкенда
     tunnels.forEach(t => { status[t.Name] = { connected: false, connecting: false, mode: '', seconds: 0, timer: null }; });
 
     renderSidebar();
@@ -53,6 +60,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (tunnels.length) selectTunnel(tunnels[0].Name);
+
+    const version = await App.Version();
+    if (version) document.getElementById('appVersion').textContent = 'v' + version;
+
+    await refreshPAC();
+
     setFooter('Готово');
   } catch (e) {
     logLocal('err', 'инициализация UI: ' + e);
@@ -194,7 +207,8 @@ async function toggleTunnel() {
       await App.DisconnectTunnel(activeId);
       // Итоговое состояние придёт событием disconnected.
     } else {
-      collectForm();
+      // Бэкенд подключается по сохранённой конфигурации — сперва применяем форму.
+      if (!await ensureFormApplied()) return;
       st.connecting = true;
       setDot(activeId, 'connecting');
       updateConnectBtn();
@@ -209,6 +223,7 @@ async function toggleTunnel() {
 /** Кнопка «Подключить все». */
 async function connectAll() {
   if (!App) return;
+  if (!await ensureFormApplied()) return; // подключаемся тем, что показано в форме
   for (const t of tunnels) {
     const st = status[t.Name];
     if (!st.connected && !st.connecting) {
@@ -242,6 +257,7 @@ async function switchMode() {
     await App.SwitchMode(target);
     tunnels.forEach(t => markDisconnected(t.Name));
     await refreshModePill();
+    await refreshPAC(); // PAC живёт только в режиме SOCKS5
   } catch (e) {
     logLocal('err', String(e));
   }
@@ -276,18 +292,122 @@ function collectForm() {
   t.TunName = document.getElementById('fTun').value.trim();
 }
 
+/**
+ * Показывает адрес PAC-файла в подвале. PAC поднимается только в режиме
+ * SOCKS5: он нужен, чтобы браузер сам выбирал туннель по домену. В
+ * TUN-режиме трафик идёт по маршрутам системы, и блок скрыт.
+ */
+async function refreshPAC() {
+  if (!App) return;
+  const line = document.getElementById('pacLine');
+  const block = document.getElementById('pacBlock');
+  let url = '';
+  try {
+    url = await App.PACURL();
+  } catch (e) {
+    logLocal('err', String(e));
+  }
+  document.getElementById('pacUrl').textContent = url || '';
+  line.classList.toggle('hidden', !url);
+  block.classList.toggle('hidden', !url);
+}
+
+/** Копирование адреса PAC в буфер обмена. */
+async function copyPAC() {
+  const url = document.getElementById('pacUrl').textContent;
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    setFooter('Адрес PAC скопирован — вставьте его в настройки прокси браузера');
+  } catch (e) {
+    setFooter('Скопируйте адрес вручную: ' + url);
+  }
+}
+
+/**
+ * Кнопка «↻ с сервера»: запрашивает список групп у VPN-сервера и подставляет
+ * его в подсказку поля. Имя группы должно совпадать с алиасом на сервере
+ * буквально, а набор групп меняется на стороне шлюза — поэтому список
+ * берётся у сервера, а не хранится в приложении.
+ */
+async function fetchGroups() {
+  if (!App) return;
+  const endpoint = document.getElementById('fEndpoint').value.trim();
+  if (!endpoint) {
+    setFooter('Укажите адрес VPN-сервера');
+    return;
+  }
+
+  setFooter('Запрашиваю список групп у ' + endpoint + '…');
+  try {
+    const groups = await App.FetchGroups(endpoint) || [];
+    const list = document.getElementById('groupOptions');
+    list.textContent = '';
+    groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g;
+      list.appendChild(opt);
+    });
+
+    if (!groups.length) {
+      setFooter('Сервер не предлагает выбор группы — оставьте поле пустым');
+      return;
+    }
+    // Пустое или неизвестное значение заменяем первым из списка, чтобы
+    // подключение не падало на несовпадении имени.
+    const field = document.getElementById('fGroup');
+    if (!groups.includes(field.value.trim())) field.value = groups[0];
+    setFooter('Групп получено: ' + groups.length);
+  } catch (e) {
+    logLocal('err', String(e));
+    setFooter('Не удалось получить список групп');
+  }
+}
+
 /** Кнопка «Сохранить»: валидация и запись конфига на бэкенде. */
 async function saveConfig() {
-  if (!App) return;
+  if (!App) return false;
   collectForm();
   try {
     await App.SaveConfig({ Mode: fullConfig.Mode, Tunnels: tunnels });
+    savedSnapshot = formSnapshot(); // с этого момента форма совпадает с бэкендом
     tunnels.forEach(t => markDisconnected(t.Name)); // SaveConfig останавливает туннели
     setFooter('Конфигурация сохранена');
+    return true;
   } catch (e) {
     logLocal('err', String(e));
     setFooter('Ошибка сохранения конфигурации');
+    return false;
   }
+}
+
+/** Слепок конфигурации для сравнения формы с тем, что знает бэкенд. */
+function formSnapshot() {
+  return JSON.stringify({ Mode: fullConfig && fullConfig.Mode, Tunnels: tunnels });
+}
+
+/**
+ * Гарантирует, что бэкенд подключается с тем, что показано в форме.
+ *
+ * Подключение выполняет бэкенд по сохранённой конфигурации, а правка полей
+ * меняла только состояние страницы. Из-за этого поменянная в интерфейсе
+ * группа игнорировалась: подключение уходило со старым именем и падало на
+ * «группа не найдена на сервере».
+ *
+ * Сохранение перерегистрирует туннели и рвёт активные подключения, поэтому
+ * молча сохранять можно только когда ничего не подключено; иначе честно
+ * просим нажать «Сохранить».
+ */
+async function ensureFormApplied() {
+  collectForm();
+  if (formSnapshot() === savedSnapshot) return true;
+
+  const busy = Object.values(status).some(s => s.connected || s.connecting);
+  if (busy) {
+    setFooter('Есть несохранённые изменения. Нажмите «Сохранить» — активные туннели будут отключены');
+    return false;
+  }
+  return await saveConfig();
 }
 
 /** Отрисовка чипов маршрутов активного туннеля. */
@@ -379,21 +499,36 @@ function showTwoFA(tunnelId) {
   twofaTunnelId = tunnelId;
   document.getElementById('twofaTunnel').textContent = tunnelId;
   document.getElementById('twofaOverlay').classList.remove('hidden');
+  setTwoFAError('');
   const inp = document.getElementById('twofaCode');
   inp.value = '';
   inp.focus();
 }
 
-/** Отправка 2FA-кода на бэкенд. */
+/**
+ * Отправка 2FA-кода на бэкенд. Окно закрывается только при успехе: раньше
+ * оно закрывалось всегда, и после неверного кода туннель молча оставался
+ * ждать ввода, а интерфейс навсегда застревал в состоянии «подключение».
+ */
 async function submitTwoFA() {
-  const code = document.getElementById('twofaCode').value.trim();
+  const input = document.getElementById('twofaCode');
+  const code = input.value.trim();
   if (!code || !twofaTunnelId) return;
   try {
     await App.Submit2FA(twofaTunnelId, code);
+    hideTwoFA();
   } catch (e) {
     logLocal('err', String(e));
+    setTwoFAError('Код не принят. Введите новый код.');
+    input.value = '';
+    input.focus();
   }
-  hideTwoFA();
+}
+
+/** Сообщение об ошибке в окне ввода 2FA-кода. */
+function setTwoFAError(text) {
+  const box = document.getElementById('twofaError');
+  if (box) box.textContent = text || '';
 }
 
 /** Закрытие диалога без отправки (туннель останется ждать код). */

@@ -22,6 +22,14 @@ export function DisconnectTunnel(arg1) {
   return window['go']['ui']['App']['DisconnectTunnel'](arg1);
 }
 
+export function Version() {
+  return window['go']['ui']['App']['Version']();
+}
+
+export function FetchGroups(arg1) {
+  return window['go']['ui']['App']['FetchGroups'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['ui']['App']['GetConfig']();
 }
@@ -56,4 +64,12 @@ export function Submit2FA(arg1, arg2) {
 
 export function SwitchMode(arg1) {
   return window['go']['ui']['App']['SwitchMode'](arg1);
+}
+
+export function PACURL() {
+  return window['go']['ui']['App']['PACURL']();
+}
+
+export function PACScript() {
+  return window['go']['ui']['App']['PACScript']();
 }

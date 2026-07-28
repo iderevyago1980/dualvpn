@@ -7,8 +7,10 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,8 +64,12 @@ type App struct {
 
 // NewApp загружает конфигурацию (создавая файл по умолчанию при отсутствии),
 // определяет режим работы и регистрирует туннели в менеджере.
-func NewApp(cfgPath string) (*App, error) {
-	cfg, err := loadOrCreate(cfgPath)
+// NewApp создаёт приложение. starterConfig — встроенный шаблон
+// config.example.toml: разворачивается в cfgPath при первом запуске,
+// когда файла конфигурации ещё нет. Пустой шаблон допустим (тесты,
+// сборки без встраивания) — тогда создаётся конфиг по умолчанию.
+func NewApp(cfgPath string, starterConfig []byte) (*App, error) {
+	cfg, err := loadOrCreate(cfgPath, starterConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +95,7 @@ func (a *App) Startup(ctx context.Context) {
 
 	tray.Start()
 	go a.forwardEvents()
+	a.startPAC()
 	a.log("info", fmt.Sprintf("DualVPN запущен: режим %s, туннелей %d, admin=%v",
 		a.GetMode(), len(a.GetTunnels()), mode.IsAdmin()))
 }
@@ -196,7 +203,7 @@ func (a *App) ConnectTunnel(id string) error {
 		a.log("err", err.Error())
 		return err
 	}
-	a.log("info", fmt.Sprintf("туннель %q: запуск openconnect", id))
+	a.log("info", fmt.Sprintf("туннель %q: подключение", id))
 	return nil
 }
 
@@ -279,6 +286,66 @@ func (a *App) GetConfig() *config.Config {
 // IsAdmin сообщает, запущено ли приложение с правами администратора.
 func (a *App) IsAdmin() bool {
 	return mode.IsAdmin()
+}
+
+// version — версия сборки. Подставляется линкером:
+//
+//	-ldflags "-X dualvpn/internal/ui.version=1.8.0"
+//
+// Значение по умолчанию помечает сборку, собранную без указания версии
+// (go build без Makefile), чтобы в интерфейсе не появлялось выдуманное число.
+var version = "dev"
+
+// Version возвращает версию сборки для отображения в интерфейсе.
+func (a *App) Version() string { return version }
+
+// startPAC поднимает раздачу PAC-файла для браузера. Имеет смысл только в
+// режиме SOCKS5: в TUN-режиме трафик и так идёт по маршрутам системы.
+// Занятый порт не считается ошибкой запуска приложения — берём свободный
+// и сообщаем фактический адрес.
+func (a *App) startPAC() {
+	if a.GetMode() != mode.SOCKS5 {
+		return
+	}
+	port := a.GetConfig().PACPort()
+	url, err := a.manager.EnablePAC(port)
+	if err != nil {
+		a.log("warn", fmt.Sprintf("порт %d для PAC занят (%v) — беру свободный", port, err))
+		if url, err = a.manager.EnablePAC(0); err != nil {
+			a.log("err", "автонастройка прокси недоступна: "+err.Error())
+			return
+		}
+	}
+	a.log("ok", "автонастройка прокси для браузера: "+url)
+}
+
+// PACURL возвращает адрес PAC-файла для настроек браузера
+// ("" — раздача не запущена, например в TUN-режиме).
+func (a *App) PACURL() string { return a.manager.PACURL() }
+
+// PACScript возвращает текущий текст PAC-скрипта (диагностика в UI).
+func (a *App) PACScript() string { return a.manager.PACScript() }
+
+// FetchGroups запрашивает у сервера список групп (алиасов tunnel-group).
+// Имя группы должно совпадать с одним из них буквально, поэтому список
+// берётся с сервера, а не задаётся в приложении: набор групп меняется на
+// стороне VPN-шлюза и зашитый в код перечень неизбежно устаревает.
+func (a *App) FetchGroups(endpoint string) ([]string, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil, errors.New("не указан адрес VPN-сервера")
+	}
+	groups, err := sslcon.FetchGroups(endpoint, false)
+	if err != nil {
+		a.log("err", fmt.Sprintf("список групп %s: %v", endpoint, err))
+		return nil, err
+	}
+	if len(groups) == 0 {
+		a.log("warn", fmt.Sprintf("сервер %s не предлагает выбор группы", endpoint))
+		return nil, nil
+	}
+	a.log("ok", fmt.Sprintf("группы %s: %s", endpoint, strings.Join(groups, ", ")))
+	return groups, nil
 }
 
 // context возвращает Wails-контекст приложения (nil до Startup).
@@ -379,14 +446,11 @@ func (a *App) log(level, msg string) {
 	}
 }
 
-// loadOrCreate загружает конфиг; если файла нет — создаёт из значений по умолчанию.
-func loadOrCreate(path string) (*config.Config, error) {
+// loadOrCreate загружает конфиг; если файла нет — разворачивает встроенный
+// шаблон config.example.toml (вместе с комментариями).
+func loadOrCreate(path string, starter []byte) (*config.Config, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		cfg := config.Default()
-		if err := cfg.Save(path); err != nil {
-			return nil, err
-		}
-		return cfg, nil
+		return config.CreateFrom(path, starter)
 	}
 	return config.Load(path)
 }

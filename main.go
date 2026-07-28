@@ -23,8 +23,15 @@ import (
 //go:embed all:frontend
 var assets embed.FS
 
+// Шаблон конфигурации: разворачивается при первом запуске, если файла
+// настроек ещё нет. Встраивается именно config.example.toml, чтобы список
+// эндпоинтов и групп жил в данных с комментариями, а не в коде.
+//
+//go:embed config.example.toml
+var starterConfig []byte
+
 func main() {
-	app, err := ui.NewApp(configPath())
+	app, err := ui.NewApp(configPath(), starterConfig)
 	if err != nil {
 		log.Fatalf("инициализация: %v", err)
 	}

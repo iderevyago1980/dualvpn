@@ -30,10 +30,30 @@ type Tunnel struct {
 	ProbeURL  string   `toml:"probe_url"`  // URL внутри VPN для проверки связности на стенде (E2E)
 }
 
+// PAC — автонастройка прокси для браузера (режим socks5).
+type PAC struct {
+	// Port — локальный порт раздачи proxy.pac. 0 — порт по умолчанию
+	// (DefaultPACPort); фиксированный порт важен, потому что адрес
+	// прописывается в настройках браузера один раз.
+	Port int `toml:"port"`
+}
+
+// DefaultPACPort — порт раздачи PAC-файла, если он не задан в конфиге.
+const DefaultPACPort = 1088
+
 // Config — корневая структура конфигурационного файла.
 type Config struct {
 	Mode    Mode     `toml:"mode"`
+	PAC     PAC      `toml:"pac"`
 	Tunnels []Tunnel `toml:"tunnels"`
+}
+
+// PACPort возвращает порт раздачи PAC с учётом значения по умолчанию.
+func (c *Config) PACPort() int {
+	if c.PAC.Port <= 0 || c.PAC.Port > 65535 {
+		return DefaultPACPort
+	}
+	return c.PAC.Port
 }
 
 // DefaultPath возвращает путь к пользовательскому конфигу в стандартном
@@ -49,29 +69,53 @@ func DefaultPath() (string, error) {
 	return filepath.Join(dir, "dualvpn", "config.toml"), nil
 }
 
-// Default возвращает конфигурацию по умолчанию с двумя эндпоинтами из SPEC.md.
+// Default возвращает пустую конфигурацию: только режим, без туннелей.
+//
+// Адреса серверов, группы, порты и маршруты — данные, а не код: они живут
+// в config.example.toml, который встраивается в бинарь и разворачивается
+// при первом запуске (см. CreateFrom). Раньше здесь лежал захардкоженный
+// список эндпоинтов, и он успел разойтись с реальностью — имена групп в нём
+// не совпадали ни с одним алиасом на живых серверах.
 func Default() *Config {
-	return &Config{
-		Mode: Mode{Preferred: "auto"},
-		Tunnels: []Tunnel{
-			{
-				Name:      "VPN-1",
-				Endpoint:  "vpn1.example.com",
-				Group:     "Group-2FA",
-				SocksPort: 1080,
-				TunName:   "vpn1",
-				Routes:    []string{"192.168.10.0/24", "10.10.0.0/16"},
-			},
-			{
-				Name:      "VPN-2",
-				Endpoint:  "vpn2.example.com",
-				Group:     "RA",
-				SocksPort: 1081,
-				TunName:   "vpn2",
-				Routes:    []string{"192.168.20.0/24", "10.20.0.0/16"},
-			},
-		},
+	return &Config{Mode: Mode{Preferred: "auto"}}
+}
+
+// FromTOML разбирает конфигурацию из сырого TOML.
+func FromTOML(data []byte) (*Config, error) {
+	var cfg Config
+	if _, err := toml.Decode(string(data), &cfg); err != nil {
+		return nil, fmt.Errorf("разбор конфигурации: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("некорректная конфигурация: %w", err)
+	}
+	return &cfg, nil
+}
+
+// CreateFrom создаёт файл конфигурации по пути path из шаблона template,
+// записывая его байт-в-байт: так пользователь получает файл с комментариями
+// (какие бывают группы, что значит режим), а не голый вывод сериализатора.
+// Пустой шаблон означает конфигурацию по умолчанию.
+func CreateFrom(path string, template []byte) (*Config, error) {
+	if len(template) == 0 {
+		cfg := Default()
+		if err := cfg.Save(path); err != nil {
+			return nil, err
+		}
+		return cfg, nil
+	}
+	cfg, err := FromTOML(template)
+	if err != nil {
+		return nil, fmt.Errorf("встроенный шаблон конфигурации: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("создание каталога конфига: %w", err)
+	}
+	// 0600: файл хранит логины и пароли.
+	if err := os.WriteFile(path, template, 0o600); err != nil {
+		return nil, fmt.Errorf("запись конфига %s: %w", path, err)
+	}
+	return cfg, nil
 }
 
 // Load читает конфигурацию из TOML-файла по указанному пути.

@@ -10,13 +10,34 @@ import (
 	"dualvpn/internal/mode"
 )
 
+// starterTemplate — шаблон конфигурации для тестов. В бою сюда попадает
+// встроенный config.example.toml; в тестах эндпоинты фиктивные, чтобы
+// проверки не зависели от содержимого боевого примера.
+const starterTemplate = `[mode]
+preferred = "auto"
+
+[[tunnels]]
+name = "Первый"
+endpoint = "vpn1.example.test"
+group = "Группа A"
+socks_port = 1080
+tun_name = "tun-a"
+
+[[tunnels]]
+name = "Второй"
+endpoint = "vpn2.example.test"
+group = "Группа B"
+socks_port = 1081
+tun_name = "tun-b"
+`
+
 // newTestApp создаёт App поверх временного конфига. ctx остаётся nil —
 // значит методы с runtime.* (EventsEmit/Window*) пропускают вызов во
 // фронтенд, и тесты не требуют Wails-рантайма и дисплея.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	app, err := NewApp(path)
+	app, err := NewApp(path, []byte(starterTemplate))
 	if err != nil {
 		t.Fatalf("NewApp: %v", err)
 	}
@@ -45,12 +66,12 @@ func TestResolveMode(t *testing.T) {
 
 func TestLoadOrCreateCreatesDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	cfg, err := loadOrCreate(path)
+	cfg, err := loadOrCreate(path, []byte(starterTemplate))
 	if err != nil {
 		t.Fatalf("loadOrCreate: %v", err)
 	}
 	if len(cfg.Tunnels) != 2 {
-		t.Errorf("в дефолтном конфиге %d туннелей, ожидалось 2", len(cfg.Tunnels))
+		t.Errorf("из шаблона получено %d туннелей, ожидалось 2", len(cfg.Tunnels))
 	}
 	// Файл должен быть создан на диске — повторная загрузка читает его же.
 	if _, err := config.Load(path); err != nil {
@@ -58,15 +79,47 @@ func TestLoadOrCreateCreatesDefault(t *testing.T) {
 	}
 }
 
+// Шаблон разворачивается дословно: комментарии в созданном файле должны
+// сохраниться, иначе пользователь потеряет подсказки по группам и режимам.
+func TestLoadOrCreateKeepsTemplateComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	tpl := "# подсказка\n" + starterTemplate
+	if _, err := loadOrCreate(path, []byte(tpl)); err != nil {
+		t.Fatalf("loadOrCreate: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "# подсказка") {
+		t.Error("комментарии шаблона не попали в созданный конфиг")
+	}
+}
+
+// Без шаблона конфиг создаётся пустым — эндпоинтов в коде больше нет.
+func TestLoadOrCreateWithoutTemplate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg, err := loadOrCreate(path, nil)
+	if err != nil {
+		t.Fatalf("loadOrCreate: %v", err)
+	}
+	if len(cfg.Tunnels) != 0 {
+		t.Errorf("без шаблона получено %d туннелей, ожидалось 0", len(cfg.Tunnels))
+	}
+}
+
 func TestLoadOrCreateLoadsExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	want := config.Default()
+	want, err := config.FromTOML([]byte(starterTemplate))
+	if err != nil {
+		t.Fatalf("FromTOML: %v", err)
+	}
 	want.Tunnels = want.Tunnels[:1]
 	want.Tunnels[0].Name = "OnlyOne"
 	if err := want.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	got, err := loadOrCreate(path)
+	got, err := loadOrCreate(path, []byte(starterTemplate))
 	if err != nil {
 		t.Fatalf("loadOrCreate: %v", err)
 	}
@@ -87,7 +140,7 @@ func TestLoadOrCreateRejectsInvalid(t *testing.T) {
 	if err := os.WriteFile(path, []byte("[mode]\npreferred = \"nope\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if _, err := loadOrCreate(path); err == nil {
+	if _, err := loadOrCreate(path, []byte(starterTemplate)); err == nil {
 		t.Error("loadOrCreate принял конфиг с mode.preferred=\"nope\", ожидалась ошибка")
 	}
 }

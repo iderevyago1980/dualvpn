@@ -1,24 +1,85 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// Шаблон конфигурации для тестов: эндпоинты в коде больше не живут
+// (стартовый конфиг разворачивается из встроенного config.example.toml).
+const testTemplate = `[mode]
+preferred = "auto"
+
+[[tunnels]]
+name = "Первый"
+endpoint = "vpn1.example.test"
+group = "Группа A"
+socks_port = 1080
+tun_name = "tun-a"
+routes = ["192.168.10.0/24"]
+
+[[tunnels]]
+name = "Второй"
+endpoint = "vpn2.example.test"
+group = "Группа B"
+socks_port = 1081
+tun_name = "tun-b"
+routes = ["192.168.20.0/24", "10.20.0.0/16"]
+`
 
 func TestDefaultValid(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("конфиг по умолчанию должен быть валиден: %v", err)
 	}
+	if len(cfg.Tunnels) != 0 {
+		t.Errorf("в конфиге по умолчанию не должно быть захардкоженных туннелей, получено %d", len(cfg.Tunnels))
+	}
+}
+
+// Боевой шаблон, встраиваемый в бинарь, обязан разбираться и проходить
+// валидацию — иначе первый запуск на чистой машине падает.
+func TestExampleConfigValid(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.toml"))
+	if err != nil {
+		t.Fatalf("чтение config.example.toml: %v", err)
+	}
+	cfg, err := FromTOML(data)
+	if err != nil {
+		t.Fatalf("config.example.toml невалиден: %v", err)
+	}
+	if len(cfg.Tunnels) == 0 {
+		t.Error("в примере конфигурации нет ни одного туннеля")
+	}
+}
+
+func TestCreateFromKeepsTemplateBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.toml")
+	tpl := "# комментарий\n" + testTemplate
+	cfg, err := CreateFrom(path, []byte(tpl))
+	if err != nil {
+		t.Fatalf("CreateFrom: %v", err)
+	}
 	if len(cfg.Tunnels) != 2 {
-		t.Errorf("ожидалось 2 туннеля, получено %d", len(cfg.Tunnels))
+		t.Errorf("ожидалось 2 туннеля из шаблона, получено %d", len(cfg.Tunnels))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != tpl {
+		t.Error("шаблон записан не байт-в-байт (потеряны комментарии)")
 	}
 }
 
 func TestSaveLoadRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.toml") // каталог создаётся Save
-	orig := Default()
+	orig, err := FromTOML([]byte(testTemplate))
+	if err != nil {
+		t.Fatalf("FromTOML: %v", err)
+	}
 	orig.Mode.Preferred = "socks5"
 	orig.Tunnels[0].Username = "user1"
 
@@ -47,7 +108,13 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestValidateErrors(t *testing.T) {
-	base := func() *Config { return Default() }
+	base := func() *Config {
+		cfg, err := FromTOML([]byte(testTemplate))
+		if err != nil {
+			t.Fatalf("FromTOML: %v", err)
+		}
+		return cfg
+	}
 
 	cases := []struct {
 		name    string

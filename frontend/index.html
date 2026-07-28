@@ -49,18 +49,16 @@
             <input type="text" id="fEndpoint">
           </div>
           <div class="form-field">
-            <label>Группа (tunnel group)</label>
+            <label>
+              Группа (tunnel group)
+              <button type="button" class="link-btn" onclick="fetchGroups()"
+                      title="Запросить список групп у VPN-сервера">↻ с сервера</button>
+            </label>
+            <!-- Список групп заполняется тем, что отдаёт сам сервер:
+                 имя должно совпадать с алиасом буквально, а набор групп
+                 меняется на стороне шлюза. -->
             <input type="text" id="fGroup" list="groupOptions">
-            <datalist id="groupOptions">
-              <option value="Group-2FA"></option>
-              <option value="Group-Partners-2FA"></option>
-              <option value="Basic"></option>
-              <option value="Group-Partners"></option>
-              <option value="Group-Ext"></option>
-              <option value="RA"></option>
-              <option value="RA-MFA"></option>
-              <option value="RA-Full"></option>
-            </datalist>
+            <datalist id="groupOptions"></datalist>
           </div>
           <div class="form-field">
             <label>Логин</label>
@@ -135,9 +133,16 @@
 
   <!-- Подвал -->
   <div class="footer">
-    <span>v0.1.0</span>
+    <!-- Заполняется из бэкенда (App.Version): версия задаётся при сборке. -->
+    <span id="appVersion">—</span>
     <span>·</span>
     <span>Config: config.toml</span>
+    <!-- Адрес PAC для браузера; в TUN-режиме блок скрыт (там он не нужен). -->
+    <span id="pacBlock" class="hidden">·</span>
+    <span id="pacLine" class="hidden">
+      Автонастройка прокси:
+      <span class="pac-url" id="pacUrl" onclick="copyPAC()" title="Нажмите, чтобы скопировать"></span>
+    </span>
     <span style="flex:1"></span>
     <span id="footerStatus">Загрузка…</span>
   </div>
@@ -149,6 +154,8 @@
     <h2>Код 2FA</h2>
     <p>Туннель «<span id="twofaTunnel"></span>» запросил второй фактор (TOTP).</p>
     <input type="text" id="twofaCode" maxlength="8" autocomplete="one-time-code" inputmode="numeric">
+    <!-- Сообщение об отклонённом коде: окно остаётся открытым для повтора. -->
+    <div class="modal-error" id="twofaError"></div>
     <div class="btn-row">
       <button class="btn btn-ghost" onclick="hideTwoFA()">Отмена</button>
       <button class="btn btn-primary" onclick="submitTwoFA()">Отправить</button>
