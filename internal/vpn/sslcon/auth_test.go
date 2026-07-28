@@ -207,7 +207,10 @@ func TestClientInitAuthUnknownGroup(t *testing.T) {
 	if err == nil {
 		t.Fatal("InitAuth с неизвестной группой должен вернуть ошибку")
 	}
-	if !strings.Contains(err.Error(), "available user groups") {
+	// В тексте ошибки должны быть и отвергнутая группа, и список доступных —
+	// без этого пользователю нечем исправить конфиг.
+	if !strings.Contains(err.Error(), "НетТакойГруппы") ||
+		!strings.Contains(err.Error(), "Basic") || !strings.Contains(err.Error(), "Partners") {
 		t.Errorf("неожиданная ошибка: %v", err)
 	}
 }

@@ -34,6 +34,7 @@ import (
 	"sslcon/proto"
 	"sslcon/utils"
 
+	"dualvpn/internal/nrpt"
 	"dualvpn/internal/routing"
 	tundev "dualvpn/internal/tun"
 )
@@ -331,6 +332,7 @@ func (t *Tunnel) SetupTUN(name string) error {
 		Name:    name,
 		Address: t.cSess.VPNAddress,
 		MTU:     t.cSess.MTU,
+		DNS:     t.cSess.DNS, // иначе имена внутренней сети не разрешаются
 	})
 	if err != nil {
 		return err
@@ -341,8 +343,23 @@ func (t *Tunnel) SetupTUN(name string) error {
 	go t.tunToPayloadOut(dev, t.cSess) // пакеты приложений → туннель
 	go t.payloadInToTun(dev, t.cSess)  // туннель → приложения
 
-	t.applyRoutes(dev.Name) // best-effort: подсети split-include → этот TUN
+	t.applyRoutes(dev.Name)    // best-effort: подсети split-include → этот TUN
+	t.applyDNSPolicy(dev.Name) // зоны split-DNS → DNS-серверы этого туннеля
 	return nil
+}
+
+// applyDNSPolicy привязывает зоны split-DNS к DNS-серверам туннеля через
+// NRPT. Без этого при двух туннелях Windows опрашивает серверы по метрике
+// интерфейса, и зоны одной корпоративной сети уходят в DNS другой.
+// Ошибки не фатальны: туннель уже поднят, страдает только разрешение имён.
+func (t *Tunnel) applyDNSPolicy(iface string) {
+	rules := nrpt.BuildRules(t.cSess.SplitDNS, t.cSess.DNS)
+	if len(rules) == 0 {
+		return
+	}
+	if err := nrpt.Apply(iface, rules); err != nil {
+		base.Error("не удалось применить правила DNS для "+iface+":", err)
+	}
 }
 
 // tunCounter обеспечивает уникальные имена интерфейсов для нескольких
@@ -441,6 +458,11 @@ func (t *Tunnel) Close() error {
 		t.mu.Unlock()
 		if t.tunDev != nil {
 			t.removeRoutes(t.tunDev.Name) // снять маршруты до удаления интерфейса
+			// Правила NRPT переживают удаление интерфейса и без явного
+			// снятия продолжили бы направлять зоны в исчезнувший DNS.
+			if err := nrpt.Remove(t.tunDev.Name); err != nil {
+				base.Error("не удалось снять правила DNS для "+t.tunDev.Name+":", err)
+			}
 			_ = t.tunDev.Close()
 		}
 	})

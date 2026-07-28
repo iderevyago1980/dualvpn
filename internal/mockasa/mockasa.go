@@ -222,6 +222,11 @@ type clientMsg struct {
 	Auth    struct {
 		Username string `xml:"username"`
 		Password string `xml:"password"`
+		// Код второго фактора клиент кладёт в элемент, названный так же,
+		// как поле в выданной challenge-форме (здесь — secondary_password).
+		// Настоящая ASA ведёт себя так же (у неё поле называется answer),
+		// поэтому мок обязан требовать именно своё имя, а не <password>.
+		SecondaryPassword string `xml:"secondary_password"`
 	} `xml:"auth"`
 	GroupSelect string `xml:"group-select"`
 }
@@ -283,9 +288,10 @@ func (s *Server) handleAuth(st *connState, body []byte) string {
 		return s.xmlInit()
 
 	case msg.Type == "auth-reply" && st.await2FA:
-		// Второй фактор: в <password> клиент прислал код
+		// Второй фактор: код приходит в <secondary_password> — так называется
+		// поле в challenge-форме, которую выдал мок.
 		want := s.cfg.TwoFAGroups[st.group]
-		if msg.Auth.Password != want {
+		if msg.Auth.SecondaryPassword != want {
 			return s.xml2FAChallenge("Неверный код. Введите код ещё раз.")
 		}
 		st.await2FA = false

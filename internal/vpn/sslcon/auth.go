@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"text/template"
@@ -68,9 +69,15 @@ type Client struct {
 	mu                 sync.Mutex
 
 	// Состояние 2FA: сервер прислал форму для второго фактора.
-	needs2FA     bool
-	twoFACode    string // код, подставляемый в шаблон при отправке (только под mu)
-	lastAuthBody []byte // сырое тело последнего ответа аутентификации (для разбора формы 2FA)
+	needs2FA      bool
+	twoFACode     string // код, подставляемый в шаблон при отправке (только под mu)
+	twoFAField    string // имя поля кода из challenge-формы (обычно answer)
+	twoFAOpaque   string // <opaque> из challenge-ответа, возвращается серверу дословно
+	twoFASendUser bool   // слать ли <username> — только если форма его содержит
+	lastAuthBody  []byte // сырое тело последнего ответа аутентификации (для разбора формы 2FA)
+
+	// serverGroups — список алиасов групп, предложенный сервером на шаге init.
+	serverGroups []string
 
 	// TunnelSetup — необязательный хук: вызывается из run() вместо
 	// SetupTUN после установки CSTP-туннеля. В режиме SOCKS5 менеджер
@@ -78,12 +85,19 @@ type Client struct {
 	TunnelSetup func(t *Tunnel) error
 
 	// Поля для high-level API (совместимость с openconnect.Client).
-	mode    string        // ModeTUN или ModeSOCKS5
-	tunName string        // имя TUN-интерфейса (режим tun)
+	mode    string // ModeTUN или ModeSOCKS5
+	tunName string // имя TUN-интерфейса (режим tun)
 	events  chan Event
 	twoFAOK chan struct{} // сигнал run(): Submit2FA успешно прошла
 	tunnel  *Tunnel
 	running bool
+
+	// stopChan закрывается в Disconnect и будит run(), если тот ждёт 2FA-код.
+	// Без него отказ от ввода кода оставлял горутину run() заблокированной
+	// навсегда: канал событий не закрывался, менеджер считал туннель
+	// запущенным, интерфейс вечно показывал «подключение».
+	stopChan chan struct{}
+	stopOnce sync.Once
 }
 
 // EventType — тип события жизненного цикла туннеля.
@@ -95,6 +109,11 @@ const (
 	EventDisconnected EventType = "disconnected"
 	EventError        EventType = "error"
 	Event2FARequired  EventType = "2fa_required"
+	// EventProgress — промежуточный шаг подключения (TLS, аутентификация).
+	// Раньше эти шаги слались как EventConnected, из-за чего Manager помечал
+	// туннель подключённым сразу после начала TLS, а UI зажигал зелёный
+	// индикатор до того, как аутентификация вообще состоялась.
+	EventProgress EventType = "progress"
 )
 
 // Event — событие от sslcon-клиента.
@@ -143,6 +162,7 @@ func NewClient(cfg ClientConfig) *Client {
 		mode:               mode,
 		tunName:            cfg.TunName,
 		twoFAOK:            make(chan struct{}, 1),
+		stopChan:           make(chan struct{}),
 		// Канал событий создаётся сразу: Manager.Start вызывает Events()
 		// из отдельной горутины одновременно с Connect() — ленивая
 		// инициализация в обоих местах давала гонку.
@@ -184,17 +204,49 @@ func (c *Client) InitAuth() error {
 	c.Prof.GroupAlias = dtd.Opaque.GroupAlias
 	c.Prof.ConfigHash = dtd.Opaque.ConfigHash
 
+	c.serverGroups = dtd.Auth.Form.Groups
 	gps := len(dtd.Auth.Form.Groups)
-	if gps != 0 && !utils.InArray(dtd.Auth.Form.Groups, c.Prof.Group) {
-		return fmt.Errorf("available user groups are: %s", strings.Join(dtd.Auth.Form.Groups, " "))
+	if gps != 0 && c.Prof.Group != "" && !utils.InArray(dtd.Auth.Form.Groups, c.Prof.Group) {
+		// Сервер отдаёт список алиасов групп; имя из конфига должно совпасть
+		// с одним из них буквально, иначе подключение бессмысленно продолжать.
+		return fmt.Errorf("группа %q не найдена на сервере; доступные группы: %s",
+			c.Prof.Group, strings.Join(dtd.Auth.Form.Groups, ", "))
 	}
 	// <group-select> отправляем только когда сервер реально предложил список
-	// групп. ocserv без select-group групп не предлагает и отвергает
-	// непрошеный group-select (реальный 401), поэтому там флаг остаётся false.
-	c.Prof.SendGroupSelect = gps != 0
+	// групп И группа выбрана. Пустая группа означает «использовать группу по
+	// умолчанию»: сервер сам подставит ту, что помечена selected. ocserv без
+	// select-group групп не предлагает и отвергает непрошеный group-select
+	// (реальный 401), поэтому там флаг остаётся false.
+	c.Prof.SendGroupSelect = gps != 0 && c.Prof.Group != ""
 
 	c.Prof.Initialized = true
 	return nil
+}
+
+// ServerGroups возвращает список групп, предложенных сервером на шаге init
+// (пусто, пока InitAuth не выполнена или если сервер групп не предлагает).
+func (c *Client) ServerGroups() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.serverGroups...)
+}
+
+// FetchGroups спрашивает у сервера список групп (алиасов tunnel-group).
+// Учётные данные не нужны: список приходит в ответе на init, до логина.
+// Нужен интерфейсу, чтобы имя группы выбиралось из списка, а не угадывалось:
+// оно должно совпасть с алиасом буквально.
+func FetchGroups(host string, insecureSkipVerify bool) ([]string, error) {
+	if host == "" {
+		return nil, errors.New("sslcon: не указан адрес сервера")
+	}
+	// Группа намеренно пустая: на этом шаге мы её и выясняем.
+	c := NewClient(ClientConfig{Host: host, InsecureSkipVerify: insecureSkipVerify})
+	defer c.Close() //nolint:errcheck // соединение открывалось только ради списка групп
+
+	if err := c.InitAuth(); err != nil {
+		return nil, err
+	}
+	return c.ServerGroups(), nil
 }
 
 // PasswordAuth выполняет аутентификацию. После успеха сервер создаёт
@@ -230,7 +282,10 @@ func (c *Client) PasswordAuth() error {
 	// Ошибка имени пользователя, пароля и т.п.
 	if dtd.Type == "auth-request" {
 		if dtd.Auth.Error.Value != "" {
-			return fmt.Errorf(dtd.Auth.Error.Value, dtd.Auth.Error.Param1)
+			// Текст ошибки — шаблон с подстановкой param1, но чаще всего
+			// без %s ("Authentication failed."). Безусловный Errorf дописывал
+			// к нему мусор вида %!(EXTRA string=).
+			return errors.New(formatServerMessage(dtd.Auth.Error.Value, dtd.Auth.Error.Param1, ""))
 		}
 		return errors.New(dtd.Auth.Message)
 	}
@@ -251,10 +306,23 @@ func (c *Client) PasswordAuth() error {
 type challengeForm struct {
 	XMLName xml.Name `xml:"config-auth"`
 	Type    string   `xml:"type,attr"`
-	Auth    struct {
-		ID      string `xml:"id,attr"`
-		Message string `xml:"message"`
-		Form    struct {
+	// Блок <opaque> challenge-ответа отличается от того, что пришёл на init:
+	// ASA кладёт в него <auth-handle>, которым связывает challenge с сессией.
+	// Его нужно вернуть дословно, поэтому храним сырое содержимое.
+	Opaque struct {
+		Inner string `xml:",innerxml"`
+	} `xml:"opaque"`
+	Auth struct {
+		ID string `xml:"id,attr"`
+		// Cisco ASA отдаёт текст запроса как шаблон в <message> и подстановки
+		// в его атрибутах: <message id="2" param1="Введите OTP-код">%s</message>.
+		// Без подстановки пользователь видел в модалке буквальное "%s".
+		Message struct {
+			Value  string `xml:",chardata"`
+			Param1 string `xml:"param1,attr"`
+			Param2 string `xml:"param2,attr"`
+		} `xml:"message"`
+		Form struct {
 			Action string `xml:"action,attr"`
 			Inputs []struct {
 				Type string `xml:"type,attr"`
@@ -264,31 +332,136 @@ type challengeForm struct {
 	} `xml:"auth"`
 }
 
+// twoFAChallenge — разобранная challenge-форма второго фактора.
+type twoFAChallenge struct {
+	Action      string // куда слать код (action формы)
+	Message     string // текст запроса для пользователя
+	Field       string // имя элемента, в котором сервер ждёт код
+	HasUsername bool   // форма содержит поле username — только тогда его слать
+	Opaque      string // содержимое <opaque> challenge-ответа, вернуть дословно
+}
+
 // detect2FAForm определяет, является ли тело ответа challenge-формой 2FA.
 // Признаки: type="auth-request" и (auth id="challenge" ИЛИ форма с <input>
 // для кода — любое поле, кроме username/password первичного логина).
-// Возвращает action формы (куда слать код) и сообщение сервера.
-func detect2FAForm(body []byte) (is2FA bool, action, message string) {
+func detect2FAForm(body []byte) (*twoFAChallenge, bool) {
 	var cf challengeForm
 	if err := xml.Unmarshal(body, &cf); err != nil {
-		return false, "", ""
+		return nil, false
 	}
 	if cf.Type != "auth-request" {
-		return false, "", ""
+		return nil, false
 	}
-	if cf.Auth.ID == "challenge" {
-		return true, cf.Auth.Form.Action, cf.Auth.Message
+
+	field := cf.codeField()
+	if cf.Auth.ID != "challenge" && field == "" {
+		return nil, false
 	}
+	return &twoFAChallenge{
+		Action:      cf.Auth.Form.Action,
+		Message:     cf.challengeMessage(),
+		Field:       field,
+		HasUsername: cf.hasInput("username"),
+		Opaque:      strings.TrimSpace(cf.Opaque.Inner),
+	}, true
+}
+
+// hasInput сообщает, есть ли в форме поле с указанным именем.
+func (cf *challengeForm) hasInput(name string) bool {
 	for _, in := range cf.Auth.Form.Inputs {
-		switch strings.ToLower(in.Name) {
-		case "username", "password", "group_list", "":
-			// поля первичного логина — не 2FA
-		default:
-			// secondary_password, answer, otp, code и т.п.
-			return true, cf.Auth.Form.Action, cf.Auth.Message
+		if strings.EqualFold(in.Name, name) {
+			return true
 		}
 	}
-	return false, "", ""
+	return false
+}
+
+// codeElement отображает имя поля формы на имя XML-элемента ответа.
+// Cisco ASA называет поле challenge-формы answer (реже whichpin/new_password),
+// но значение ждёт в элементе <password> — так же поступает OpenConnect
+// (xmlpost_append_form_opts). Отправка <answer> приводит к «Login failed.».
+func codeElement(field string) string {
+	switch strings.ToLower(field) {
+	case "", "answer", "whichpin", "new_password":
+		return "password"
+	default:
+		// secondary_password и прочие имена уходят как есть.
+		return field
+	}
+}
+
+// codeField возвращает имя поля формы, в котором сервер ждёт код второго
+// фактора. Клиент обязан назвать элемент в <auth> именно так, как поле
+// названо в форме: реальная ASA просит <answer>, мок — <secondary_password>.
+// Раньше код всегда уходил в <password>, и живой сервер отвечал
+// «Login failed.» на верный код.
+func (cf *challengeForm) codeField() string {
+	for _, in := range cf.Auth.Form.Inputs {
+		if strings.EqualFold(in.Type, "submit") || strings.EqualFold(in.Type, "hidden") {
+			continue
+		}
+		switch strings.ToLower(in.Name) {
+		case "username", "password", "group_list", "":
+			// поля первичного логина — не второй фактор
+		default:
+			return in.Name
+		}
+	}
+	return ""
+}
+
+// challengeMessage собирает читаемый текст запроса второго фактора.
+func (cf *challengeForm) challengeMessage() string {
+	return formatServerMessage(cf.Auth.Message.Value, cf.Auth.Message.Param1, cf.Auth.Message.Param2)
+}
+
+// applyChallenge запоминает параметры challenge-формы, нужные для ответа:
+// адрес отправки, имя поля с кодом и блок <opaque>. Вызывается под c.mu.
+func (c *Client) applyChallenge(ch *twoFAChallenge) {
+	if ch.Action != "" {
+		c.Prof.AuthPath = ch.Action // код отправляется на action challenge-формы
+	}
+	c.twoFAField = ch.Field
+	c.twoFAOpaque = ch.Opaque
+	c.twoFASendUser = ch.HasUsername
+}
+
+// formatServerMessage приводит сообщение Cisco ASA к читаемому виду.
+// ASA отдаёт текст как шаблон, а подстановки — отдельными атрибутами:
+//
+//	<message id="2" param1="Введите OTP-код" param2="">%s</message>
+//	<error id="16" param1="" param2="">Login error.</error>
+//
+// Шаблон может не содержать ни одного %s (тогда подстановки не нужны) или
+// быть пустым (тогда весь текст — в параметрах). Безусловный Sprintf в обоих
+// случаях портил сообщение: пользователь видел литеральное "%s" в модалке
+// 2FA и "Authentication failed.%!(EXTRA string=)" в журнале.
+func formatServerMessage(tpl, param1, param2 string) string {
+	tpl = strings.TrimSpace(tpl)
+	p1 := strings.TrimSpace(param1)
+	p2 := strings.TrimSpace(param2)
+
+	if tpl == "" {
+		return strings.TrimSpace(p1 + " " + p2)
+	}
+	n := strings.Count(tpl, "%s")
+	if n == 0 {
+		return tpl
+	}
+	// Подставляем ровно по количеству %s: лишние аргументы Sprintf дописал бы
+	// как %!(EXTRA...), недостающие — как %!s(MISSING).
+	args := make([]any, 0, n)
+	for i := 0; i < n; i++ {
+		switch i {
+		case 0:
+			args = append(args, p1)
+		case 1:
+			args = append(args, p2)
+		default:
+			args = append(args, "")
+		}
+	}
+	return strings.TrimSpace(fmt.Sprintf(tpl, args...))
 }
 
 // check2FAChallenge проверяет последний ответ сервера на challenge-форму 2FA.
@@ -298,15 +471,13 @@ func (c *Client) check2FAChallenge(dtd *proto.DTD) error {
 	if dtd.Type != "auth-request" || dtd.Auth.Error.Value != "" {
 		return nil
 	}
-	is2FA, action, message := detect2FAForm(c.lastAuthBody)
+	ch, is2FA := detect2FAForm(c.lastAuthBody)
 	if !is2FA {
 		return nil
 	}
-	if action != "" {
-		c.Prof.AuthPath = action // код отправляется на action challenge-формы
-	}
+	c.applyChallenge(ch)
 	c.needs2FA = true
-	if message != "" {
+	if message := ch.Message; message != "" {
 		return fmt.Errorf("%w: %s", ErrNeeds2FA, message)
 	}
 	return ErrNeeds2FA
@@ -338,6 +509,17 @@ func (c *Client) Cookie() string {
 	return c.SessionToken
 }
 
+// secretElement — элементы блока <auth>, значения которых нельзя писать в лог.
+var secretElement = regexp.MustCompile(`(?s)<(password|answer|secondary_password|otp|code|passwd)>.*?</(?:password|answer|secondary_password|otp|code|passwd)>`)
+
+// maskSecrets прячет значения паролей и кодов, оставляя имена элементов.
+// Раньше вырезался весь блок <auth>...</auth> целиком — и по логу нельзя
+// было понять, в каком элементе ушёл код второго фактора, а именно там и
+// была причина отказов реальной ASA.
+func maskSecrets(body string) string {
+	return secretElement.ReplaceAllString(body, "<$1>***</$1>")
+}
+
 // tplPost рендерит XML-шаблон и отправляет запрос по уже открытому
 // TLS-соединению. Аналог auth.tplPost, но без глобалов: заголовки
 // X-Transcend-Version / X-Aggregate-Auth ставятся напрямую (бывший reqHeaders).
@@ -351,8 +533,13 @@ func (c *Client) tplPost(typ int, path string, dtd *proto.DTD) error {
 		t, _ := template.New("2fa_reply").Parse(template2FAReply)
 		_ = t.Execute(tplBuffer, struct {
 			*Profile
-			Code string
-		}{c.Prof, c.twoFACode})
+			Code         string
+			CodeField    string
+			OpaqueXML    string
+			HasOpaque    bool
+			SendUsername bool
+		}{c.Prof, c.twoFACode, codeElement(c.twoFAField),
+			c.twoFAOpaque, c.twoFAOpaque != "", c.twoFASendUser})
 	default:
 		t, _ := template.New("auth_reply").Parse(templateAuthReply)
 		_ = t.Execute(tplBuffer, c.Prof)
@@ -360,8 +547,7 @@ func (c *Client) tplPost(typ int, path string, dtd *proto.DTD) error {
 	if base.Cfg.LogLevel == "Debug" {
 		post := tplBuffer.String()
 		if typ != tplInit {
-			// не логируем пароль и 2FA-код
-			post = utils.RemoveBetween(post, "<auth>", "</auth>")
+			post = maskSecrets(post)
 		}
 		base.Debug(post)
 	}
@@ -452,17 +638,23 @@ func (c *Client) Submit2FA(code string) error {
 
 	if dtd.Type == "auth-request" {
 		// Сервер прислал новую challenge-форму или ошибку — код не принят
-		if is2FA, action, message := detect2FAForm(c.lastAuthBody); is2FA {
-			if action != "" {
-				c.Prof.AuthPath = action
+		if ch, is2FA := detect2FAForm(c.lastAuthBody); is2FA {
+			// Сервер выдал новую challenge-форму: у неё свой auth-handle,
+			// поэтому состояние обновляем перед повторной попыткой.
+			c.applyChallenge(ch)
+			msg := "сервер отклонил 2FA-код"
+			if ch.Message != "" {
+				msg += ": " + ch.Message
 			}
-			if message != "" {
-				return fmt.Errorf("sslcon: сервер отклонил 2FA-код: %s", message)
-			}
-			return errors.New("sslcon: сервер отклонил 2FA-код")
+			// Просим код заново: run() всё ещё ждёт, и без нового запроса
+			// интерфейс закрыл бы окно ввода и завис бы в «подключении».
+			c.emit(Event2FARequired, msg)
+			return fmt.Errorf("sslcon: %s", msg)
 		}
+		// Повторная форма не пришла — попытка исчерпана, дальше ждать нечего.
+		c.failAuth()
 		if dtd.Auth.Error.Value != "" {
-			return fmt.Errorf(dtd.Auth.Error.Value, dtd.Auth.Error.Param1)
+			return errors.New(formatServerMessage(dtd.Auth.Error.Value, dtd.Auth.Error.Param1, ""))
 		}
 		return errors.New(dtd.Auth.Message)
 	}
@@ -481,6 +673,14 @@ func (c *Client) Submit2FA(code string) error {
 	default:
 	}
 	return nil
+}
+
+// failAuth прекращает ожидание кода в run(): сервер отверг аутентификацию
+// окончательно и новой challenge-формы не прислал. Вызывается под c.mu.
+// Без этого run() ждал бы код, которого уже некому принять.
+func (c *Client) failAuth() {
+	c.needs2FA = false
+	c.stopOnce.Do(func() { close(c.stopChan) })
 }
 
 // Needs2FA возвращает true, если сервер запросил второй фактор и код
@@ -510,8 +710,11 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Disconnect останавливает туннель.
+// Disconnect останавливает туннель. Если подключение ещё ждёт 2FA-код,
+// ожидание прерывается — иначе горутина run() осталась бы висеть.
 func (c *Client) Disconnect() error {
+	c.stopOnce.Do(func() { close(c.stopChan) })
+
 	// Снимаем нужное под мьютексом и сразу отпускаем: Close() берёт c.mu
 	// сам, а sync.Mutex не реентрантный — держать его здесь нельзя.
 	c.mu.Lock()
@@ -548,13 +751,13 @@ func (c *Client) run(ctx context.Context) {
 		}
 	}()
 
-	c.emit(EventConnected, "Инициализация TLS...")
+	c.emit(EventProgress, "Инициализация TLS...")
 	if err := c.InitAuth(); err != nil {
 		c.emit(EventError, fmt.Sprintf("InitAuth: %v", err))
 		return
 	}
 
-	c.emit(EventConnected, "Аутентификация...")
+	c.emit(EventProgress, "Аутентификация...")
 	if err := c.PasswordAuth(); err != nil {
 		if !errors.Is(err, ErrNeeds2FA) {
 			c.emit(EventError, fmt.Sprintf("PasswordAuth: %v", err))
@@ -565,13 +768,16 @@ func (c *Client) run(ctx context.Context) {
 		c.emit(Event2FARequired, err.Error())
 		select {
 		case <-c.twoFAOK:
+		case <-c.stopChan:
+			c.emit(EventDisconnected, "Подключение отменено во время ожидания 2FA-кода")
+			return
 		case <-ctx.Done():
 			c.emit(EventDisconnected, "Подключение отменено во время ожидания 2FA-кода")
 			return
 		}
 	}
 
-	c.emit(EventConnected, "Аутентификация успешна, установка туннеля...")
+	c.emit(EventProgress, "Аутентификация успешна, установка туннеля...")
 
 	tunnel, err := c.SetupTunnel(c.mode)
 	if err != nil {
@@ -624,14 +830,14 @@ func (c *Client) emit(t EventType, msg string) {
 const templateInit = `<?xml version="1.0" encoding="UTF-8"?>
 <config-auth client="vpn" type="init" aggregate-auth-version="2">
     <version who="vpn">{{.AppVersion}}</version>
-    <device-id computer-name="{{.ComputerName}}" device-type="{{.DeviceType}}" platform-version="{{.PlatformVersion}}" unique-id="{{.UniqueId}}"></device-id>
+    <device-id computer-name="{{.ComputerName}}" device-type="{{.DeviceType}}" platform-version="{{.PlatformVersion}}" unique-id="{{.UniqueId}}">{{.Platform}}</device-id>
 </config-auth>`
 
 // https://datatracker.ietf.org/doc/html/draft-mavrogiannopoulos-openconnect-03#section-2.1.2.2
 const templateAuthReply = `<?xml version="1.0" encoding="UTF-8"?>
 <config-auth client="vpn" type="auth-reply" aggregate-auth-version="2">
     <version who="vpn">{{.AppVersion}}</version>
-    <device-id computer-name="{{.ComputerName}}" device-type="{{.DeviceType}}" platform-version="{{.PlatformVersion}}" unique-id="{{.UniqueId}}"></device-id>
+    <device-id computer-name="{{.ComputerName}}" device-type="{{.DeviceType}}" platform-version="{{.PlatformVersion}}" unique-id="{{.UniqueId}}">{{.Platform}}</device-id>
     <opaque is-for="sg">
         <tunnel-group>{{.TunnelGroup}}</tunnel-group>
         <group-alias>{{.GroupAlias}}</group-alias>
@@ -647,20 +853,33 @@ const templateAuthReply = `<?xml version="1.0" encoding="UTF-8"?>
 {{if .SendGroupSelect}}    <group-select>{{.Group}}</group-select>
 {{end}}</config-auth>`
 
-// Ответ на challenge-форму 2FA: в <password> подставляется код второго
-// фактора (TOTP/SMS/push-код), как это делает официальный AnyConnect.
+// Ответ на challenge-форму 2FA.
+//
+// Правило простое: в ответе повторяются ровно поля challenge-формы — так же
+// строит запрос OpenConnect (xmlpost_append_form_opts). Отсюда три отличия
+// от первичного auth-reply, каждое из которых по отдельности приводило к
+// «Login failed.» на верный код:
+//
+//   - нет <username>: challenge-форма его не содержит (шлём только если
+//     сервер всё же попросил — {{if .SendUsername}});
+//   - нет <group-select>: группа выбрана на первом шаге, повторный выбор ASA
+//     трактует как новую попытку первичного логина;
+//   - <opaque> возвращается тот, что пришёл в challenge-ответе: в нём лежит
+//     <auth-handle>, которым сервер связывает ответ с выданным challenge.
+//
+// Имя элемента с кодом даёт codeElement: поле формы answer соответствует
+// элементу <password>.
 const template2FAReply = `<?xml version="1.0" encoding="UTF-8"?>
 <config-auth client="vpn" type="auth-reply" aggregate-auth-version="2">
     <version who="vpn">{{.AppVersion}}</version>
-    <device-id computer-name="{{.ComputerName}}" device-type="{{.DeviceType}}" platform-version="{{.PlatformVersion}}" unique-id="{{.UniqueId}}"></device-id>
-    <opaque is-for="sg">
+    <device-id computer-name="{{.ComputerName}}" device-type="{{.DeviceType}}" platform-version="{{.PlatformVersion}}" unique-id="{{.UniqueId}}">{{.Platform}}</device-id>
+    <opaque is-for="sg">{{if .HasOpaque}}{{.OpaqueXML}}{{else}}
         <tunnel-group>{{.TunnelGroup}}</tunnel-group>
         <group-alias>{{.GroupAlias}}</group-alias>
         <config-hash>{{.ConfigHash}}</config-hash>
-    </opaque>
+    {{end}}</opaque>
     <auth>
-        <username>{{.Username}}</username>
-        <password>{{.Code}}</password>
+{{if .SendUsername}}        <username>{{.Username}}</username>
+{{end}}        <{{.CodeField}}>{{.Code}}</{{.CodeField}}>
     </auth>
-{{if .SendGroupSelect}}    <group-select>{{.Group}}</group-select>
-{{end}}</config-auth>`
+</config-auth>`

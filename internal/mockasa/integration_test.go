@@ -222,6 +222,128 @@ func TestWrong2FARejected(t *testing.T) {
 	_ = client.Close()
 }
 
+// waitClientEvent — то же, что waitEvent, но для канала событий одного
+// клиента (тесты жизненного цикла 2FA работают без менеджера).
+func waitClientEvent(t *testing.T, ch <-chan sslcon.Event, want sslcon.EventType, timeout time.Duration) sslcon.Event {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatalf("канал событий закрыт до события %q", want)
+			}
+			t.Logf("%s: %s", ev.Type, ev.Message)
+			if ev.Type == want {
+				return ev
+			}
+			if ev.Type == sslcon.EventError {
+				t.Fatalf("неожиданная ошибка от туннеля: %s", ev.Message)
+			}
+		case <-deadline:
+			t.Fatalf("не дождались события %q за %s", want, timeout)
+		}
+	}
+}
+
+// TestWrong2FACodeAllowsRetry — после отклонённого кода сервер выдаёт новую
+// challenge-форму, и клиент обязан снова запросить код (Event2FARequired) и
+// принять правильный. Раньше повторного запроса не было: интерфейс закрывал
+// окно ввода, а подключение оставалось ждать код навсегда.
+func TestWrong2FACodeAllowsRetry(t *testing.T) {
+	const code = "424242"
+	srv, err := mockasa.New(mockasa.Config{
+		Groups:      []string{"Group-2FA"},
+		TwoFAGroups: map[string]string{"Group-2FA": code},
+		Users:       map[string]string{"bob": "pw"},
+		VPNAddress:  "10.20.0.5",
+		HostIP:      "10.20.0.1",
+	})
+	if err != nil {
+		t.Fatalf("запуск мок-шлюза: %v", err)
+	}
+	defer srv.Close()
+
+	client := sslcon.NewClient(sslcon.ClientConfig{
+		Host:               srv.Addr(),
+		Username:           "bob",
+		Password:           "pw",
+		Group:              "Group-2FA",
+		Mode:               sslcon.ModeSOCKS5,
+		InsecureSkipVerify: true,
+	})
+	client.TunnelSetup = func(*sslcon.Tunnel) error { return nil }
+	defer client.Disconnect() //nolint:errcheck // тест завершает туннель в любом случае
+
+	events := client.Events()
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	waitClientEvent(t, events, sslcon.Event2FARequired, 10*time.Second)
+	if err := client.Submit2FA("000000"); err == nil {
+		t.Fatal("неверный 2FA-код должен быть отклонён")
+	}
+	// Ключевое: клиент снова просит код, а не молча висит.
+	waitClientEvent(t, events, sslcon.Event2FARequired, 10*time.Second)
+
+	if err := client.Submit2FA(code); err != nil {
+		t.Fatalf("верный код после ошибки должен приниматься: %v", err)
+	}
+	waitClientEvent(t, events, sslcon.EventConnected, 15*time.Second)
+}
+
+// TestDisconnectDuringTwoFAWait — отказ от ввода кода должен завершать
+// подключение. Раньше Disconnect не будил ожидание, горутина подключения
+// висела вечно, канал событий не закрывался, и туннель нельзя было
+// перезапустить («туннель уже запущен») до перезапуска приложения.
+func TestDisconnectDuringTwoFAWait(t *testing.T) {
+	srv, err := mockasa.New(mockasa.Config{
+		Groups:      []string{"Group-2FA"},
+		TwoFAGroups: map[string]string{"Group-2FA": "424242"},
+		Users:       map[string]string{"bob": "pw"},
+		VPNAddress:  "10.20.0.5",
+		HostIP:      "10.20.0.1",
+	})
+	if err != nil {
+		t.Fatalf("запуск мок-шлюза: %v", err)
+	}
+	defer srv.Close()
+
+	client := sslcon.NewClient(sslcon.ClientConfig{
+		Host:               srv.Addr(),
+		Username:           "bob",
+		Password:           "pw",
+		Group:              "Group-2FA",
+		Mode:               sslcon.ModeSOCKS5,
+		InsecureSkipVerify: true,
+	})
+	client.TunnelSetup = func(*sslcon.Tunnel) error { return nil }
+
+	events := client.Events()
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	waitClientEvent(t, events, sslcon.Event2FARequired, 10*time.Second)
+
+	if err := client.Disconnect(); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+
+	// Канал событий закрывается только когда run() действительно завершилась.
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return // run() завершилась — ожидание кода прервано
+			}
+		case <-deadline:
+			t.Fatal("подключение не завершилось после Disconnect во время ожидания 2FA-кода")
+		}
+	}
+}
+
 // TestWrongPasswordRejected — неверный пароль отклоняется на первом шаге.
 func TestWrongPasswordRejected(t *testing.T) {
 	srv, err := mockasa.New(mockasa.Config{

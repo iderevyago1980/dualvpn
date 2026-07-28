@@ -9,6 +9,7 @@ package sslcon
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,11 @@ type ConnSession struct {
 	MTU           int
 	SplitInclude  []string
 	SplitExclude  []string
+	// SplitDNS — доменные суффиксы, которые обслуживает DNS внутри VPN
+	// (X-CSTP-Split-DNS). TunnelAllDNS=true означает, что через VPN идут
+	// вообще все запросы (X-CSTP-Tunnel-All-DNS).
+	SplitDNS     []string
+	TunnelAllDNS bool
 
 	TLSCipherSuite    string
 	TLSDpdTime        int // https://datatracker.ietf.org/doc/html/rfc3706
@@ -129,6 +135,8 @@ func (s *Session) NewConnSession(header *http.Header) *ConnSession {
 	cSess.DNS = header.Values("X-CSTP-DNS")
 	cSess.SplitInclude = header.Values("X-CSTP-Split-Include")
 	cSess.SplitExclude = header.Values("X-CSTP-Split-Exclude")
+	cSess.SplitDNS = header.Values("X-CSTP-Split-DNS")
+	cSess.TunnelAllDNS = strings.EqualFold(header.Get("X-CSTP-Tunnel-All-DNS"), "true")
 
 	cSess.TLSDpdTime, _ = strconv.Atoi(header.Get("X-CSTP-DPD"))
 	cSess.TLSKeepaliveTime, _ = strconv.Atoi(header.Get("X-CSTP-Keepalive"))

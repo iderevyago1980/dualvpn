@@ -44,6 +44,26 @@ type Profile struct {
 	DeviceType      string
 	PlatformVersion string
 	UniqueId        string
+
+	// Platform — тело элемента <device-id> ("win", "linux-64", "mac-intel"),
+	// как его шлёт настоящий AnyConnect. Реальная Cisco ASA на пустое тело
+	// отвечает `<error id="96">VPN Server internal error.</error>` уже на
+	// шаге init и дальше диалог не идёт (в upstream sslcon тело пустое —
+	// ocserv и мок это прощают, ASA нет).
+	Platform string
+}
+
+// platformID возвращает идентификатор платформы для <device-id> в терминах
+// AnyConnect. Значения сверены с официальным клиентом и OpenConnect.
+func platformID() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "win"
+	case "darwin":
+		return "mac-intel"
+	default:
+		return "linux-64"
+	}
 }
 
 // NewProfile создаёт профиль подключения. Сведения об устройстве
@@ -73,6 +93,10 @@ func hostWithPort(host string) string {
 
 // fillDeviceInfo заполняет атрибуты device-id для XML-запросов.
 func (p *Profile) fillDeviceInfo() {
+	// Платформа не зависит от sysinfo и обязана быть заполнена всегда:
+	// без неё ASA отвергает init (см. комментарий к полю Platform).
+	p.Platform = platformID()
+
 	host, err := sysinfo.Host()
 	if err != nil {
 		return
