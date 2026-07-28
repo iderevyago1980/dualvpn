@@ -50,6 +50,8 @@ type Bridge struct {
 	outChan chan<- []byte // пакеты в tunnel (egress)
 	srv     *Server       // SOCKS5-фронтенд (armon/go-socks5) с dial через netstack
 
+	resolver *tunnelResolver // разрешение имён через DNS-серверы VPN
+
 	localAddr tcpip.Address // IPv4-адрес клиента внутри VPN (источник исходящих)
 
 	cancel    context.CancelFunc
@@ -94,7 +96,11 @@ func NewBridge(port int, in <-chan []byte, out chan<- []byte) (*Bridge, error) {
 		outChan: out,
 	}
 
-	srv, err := New(port, b.dialVPN)
+	// Резолвер создаётся сразу, но конфигурацию DNS получает позже
+	// (SetDNS до Start) — заголовки сессии известны только после CONNECT.
+	b.resolver = newTunnelResolver(DNSConfig{}, b.dialVPN)
+
+	srv, err := New(port, b.dialVPN, b.resolver)
 	if err != nil {
 		s.Close()
 		return nil, err
@@ -102,6 +108,23 @@ func NewBridge(port int, in <-chan []byte, out chan<- []byte) (*Bridge, error) {
 	b.srv = srv
 	return b, nil
 }
+
+// SetDNS задаёт DNS-серверы и зоны split-DNS, выданные шлюзом. Без этого
+// имена разрешаются системным резолвером, и внутренние имена VPN
+// недоступны. Вызывать до Start.
+func (b *Bridge) SetDNS(cfg DNSConfig) {
+	b.resolver.cfg = cfg
+}
+
+// LookupIP разрешает имя так же, как это делает SOCKS5-сервер моста, и
+// сообщает источник ответа (SourceVPN / SourceSystem). Нужен для
+// диагностики: без источника «успех» неотличим от ответа публичного DNS.
+func (b *Bridge) LookupIP(ctx context.Context, name string) (net.IP, string, error) {
+	return b.resolver.resolveWithSource(ctx, name)
+}
+
+// DNSServers возвращает адреса DNS-серверов, полученные от шлюза.
+func (b *Bridge) DNSServers() []string { return b.resolver.cfg.Servers }
 
 // Port возвращает локальный порт SOCKS5-сервера.
 func (b *Bridge) Port() int { return b.port }
@@ -228,13 +251,15 @@ func (b *Bridge) dialVPN(ctx context.Context, network, addr string) (net.Conn, e
 
 	ip := net.ParseIP(host)
 	if ip == nil {
-		// Домен: разрешаем системным резолвером (go-socks5 обычно уже
-		// разрешил имя сам, сюда попадает готовый IP)
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
-		if err != nil || len(ips) == 0 {
-			return nil, fmt.Errorf("socks5: не удалось разрешить %q: %w", host, err)
+		// Обычно go-socks5 разрешает имя раньше (через наш резолвер) и сюда
+		// приходит готовый IP. Страховка на случай прямого вызова dialVPN:
+		// используем тот же резолвер, а не системный, иначе внутренние
+		// имена VPN снова окажутся неразрешимыми.
+		_, resolved, err := b.resolver.Resolve(ctx, host)
+		if err != nil {
+			return nil, err
 		}
-		ip = ips[0]
+		ip = resolved
 	}
 
 	var proto tcpip.NetworkProtocolNumber

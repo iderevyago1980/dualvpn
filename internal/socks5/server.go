@@ -34,10 +34,16 @@ type Server struct {
 // New создаёт SOCKS5-сервер на указанном локальном порту.
 // Если dial == nil, соединения устанавливаются напрямую (без туннеля) —
 // полезно для отладки каркаса до интеграции netstack.
-func New(port int, dial DialFunc) (*Server, error) {
+// resolver == nil означает системное разрешение имён (поведение по умолчанию
+// в go-socks5); для доступа к внутренним именам сюда передаётся резолвер,
+// работающий через DNS-серверы VPN.
+func New(port int, dial DialFunc, resolver gosocks5.NameResolver) (*Server, error) {
 	conf := &gosocks5.Config{}
 	if dial != nil {
 		conf.Dial = dial
+	}
+	if resolver != nil {
+		conf.Resolver = resolver
 	}
 	inner, err := gosocks5.New(conf)
 	if err != nil {
