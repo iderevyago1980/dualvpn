@@ -3,8 +3,11 @@ package vpn
 import (
 	"context"
 	"fmt"
+	"net"
+	"sort"
 	"sync"
 
+	"dualvpn/internal/pac"
 	"dualvpn/internal/socks5"
 	"dualvpn/internal/vpn/sslcon"
 )
@@ -30,6 +33,11 @@ type tunnelState struct {
 	client    *sslcon.Client
 	bridge    *socks5.Bridge // SOCKS5-мост поверх gVisor netstack (режим socks5)
 	connected bool
+
+	// pacRule — правила автонастройки прокси для этого туннеля (зоны и
+	// подсети от шлюза). Заполняется при подключении, снимается при
+	// отключении: PAC должен направлять браузер только в живой туннель.
+	pacRule *pac.Tunnel
 }
 
 // Manager — координирует несколько одновременных VPN-туннелей:
@@ -38,6 +46,7 @@ type Manager struct {
 	mu      sync.Mutex
 	tunnels map[string]*tunnelState
 	events  chan ManagerEvent
+	pac     *pac.Server // необязательный: nil, пока PAC не включён
 }
 
 // NewManager создаёт пустой менеджер туннелей.
@@ -46,6 +55,68 @@ func NewManager() *Manager {
 		tunnels: make(map[string]*tunnelState),
 		events:  make(chan ManagerEvent, 64),
 	}
+}
+
+// EnablePAC поднимает раздачу PAC-файла на 127.0.0.1:port (0 — свободный
+// порт) и возвращает URL для браузера. Смысл имеет только в режиме SOCKS5:
+// PAC направляет браузер в тот туннель, которому принадлежит домен.
+func (m *Manager) EnablePAC(port int) (string, error) {
+	srv := pac.NewServer()
+	if err := srv.Start(port); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	old := m.pac
+	m.pac = srv
+	m.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	m.refreshPAC()
+	return srv.URL(), nil
+}
+
+// PACURL возвращает адрес PAC-файла ("" — раздача не включена).
+func (m *Manager) PACURL() string {
+	m.mu.Lock()
+	srv := m.pac
+	m.mu.Unlock()
+	if srv == nil {
+		return ""
+	}
+	return srv.URL()
+}
+
+// PACScript возвращает текущий текст PAC-скрипта (для UI и диагностики).
+func (m *Manager) PACScript() string {
+	m.mu.Lock()
+	srv := m.pac
+	m.mu.Unlock()
+	if srv == nil {
+		return ""
+	}
+	return srv.Script()
+}
+
+// refreshPAC пересобирает правила по подключённым сейчас туннелям.
+func (m *Manager) refreshPAC() {
+	m.mu.Lock()
+	srv := m.pac
+	rules := make([]pac.Tunnel, 0, len(m.tunnels))
+	for _, st := range m.tunnels {
+		if st.pacRule != nil {
+			rules = append(rules, *st.pacRule)
+		}
+	}
+	m.mu.Unlock()
+
+	if srv == nil {
+		return
+	}
+	// Порядок карты случаен — фиксируем по имени, чтобы скрипт не «дрожал»
+	// между обновлениями и его можно было сравнивать глазами.
+	sort.Slice(rules, func(i, j int) bool { return rules[i].Name < rules[j].Name })
+	srv.SetTunnels(rules)
 }
 
 // AddTunnel регистрирует туннель в менеджере (без запуска).
@@ -103,19 +174,34 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			if err != nil {
 				return err
 			}
-			if addr := t.CSess().VPNAddress; addr != "" {
+			cSess := t.CSess()
+			if addr := cSess.VPNAddress; addr != "" {
 				if err := bridge.SetLocalAddress(addr); err != nil {
 					_ = bridge.Close()
 					return err
 				}
 			}
+			// DNS-серверы шлюза: без них имена внутренней сети разрешались
+			// бы системным (публичным) резолвером и не находились.
+			bridge.SetDNS(socks5.DNSConfig{
+				Servers:   cSess.DNS,
+				Domains:   cSess.SplitDNS,
+				TunnelAll: cSess.TunnelAllDNS,
+			})
 			if err := bridge.Start(ctx); err != nil {
 				_ = bridge.Close()
 				return err
 			}
 			m.mu.Lock()
 			st.bridge = bridge
+			st.pacRule = &pac.Tunnel{
+				Name:      id,
+				SocksPort: port,
+				Domains:   cSess.SplitDNS,
+				Subnets:   cSess.SplitInclude,
+			}
 			m.mu.Unlock()
+			m.refreshPAC()
 			m.emit(id, sslcon.Event{
 				Type:    sslcon.EventConnected,
 				Message: fmt.Sprintf("SOCKS5-прокси слушает на %s", bridge.Addr()),
@@ -165,7 +251,9 @@ func (m *Manager) Stop(id string) error {
 	client := st.client
 	bridge := st.bridge
 	st.bridge = nil
+	st.pacRule = nil // браузер не должен ходить в остановленный туннель
 	m.mu.Unlock()
+	m.refreshPAC()
 
 	if bridge != nil {
 		_ = bridge.Close() // сначала останавливаем SOCKS5-мост, затем туннель
@@ -219,6 +307,35 @@ func (m *Manager) Status(id string) (connected bool, mode string) {
 	return st.connected, st.cfg.Mode
 }
 
+// LookupResult — результат диагностического разрешения имени.
+type LookupResult struct {
+	IP      net.IP
+	Source  string   // кто ответил: DNS внутри VPN или системный резолвер
+	Servers []string // DNS-серверы, выданные шлюзом этого туннеля
+}
+
+// LookupIP разрешает имя через DNS указанного туннеля (режим socks5).
+// Диагностический метод: показывает, работает ли разрешение имён внутри VPN
+// отдельно от установления соединений.
+func (m *Manager) LookupIP(ctx context.Context, id, name string) (LookupResult, error) {
+	m.mu.Lock()
+	st, ok := m.tunnels[id]
+	var bridge *socks5.Bridge
+	if ok {
+		bridge = st.bridge
+	}
+	m.mu.Unlock()
+
+	if !ok {
+		return LookupResult{}, fmt.Errorf("туннель %q не найден", id)
+	}
+	if bridge == nil {
+		return LookupResult{}, fmt.Errorf("у туннеля %q нет SOCKS5-моста (режим не socks5 или туннель не поднят)", id)
+	}
+	ip, source, err := bridge.LookupIP(ctx, name)
+	return LookupResult{IP: ip, Source: source, Servers: bridge.DNSServers()}, err
+}
+
 // forwardEvents читает события клиента до закрытия его канала,
 // обновляет состояние туннеля и пересылает события в общий канал.
 func (m *Manager) forwardEvents(id string, client *sslcon.Client) {
@@ -244,8 +361,10 @@ func (m *Manager) forwardEvents(id string, client *sslcon.Client) {
 		st.connected = false
 		bridge = st.bridge
 		st.bridge = nil
+		st.pacRule = nil // туннель упал — снимаем его правила из PAC
 	}
 	m.mu.Unlock()
+	m.refreshPAC()
 	if bridge != nil {
 		_ = bridge.Close() // туннель завершился — SOCKS5-мост больше не нужен
 	}
