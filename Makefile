@@ -13,6 +13,9 @@ VERSION  ?= 1.8.0
 LINUX_TAGS   := desktop,production,webkit2_41
 WINDOWS_TAGS := desktop,production
 
+# Версия показывается в интерфейсе; без этого флага сборка помечается как "dev".
+VERSION_LDFLAG := -X dualvpn/internal/ui.version=$(VERSION)
+
 DEB_ARCH := amd64
 DEB_ROOT := $(BINDIR)/deb/dualvpn_$(VERSION)_$(DEB_ARCH)
 DEB_PKG  := $(BINDIR)/dualvpn_$(VERSION)_$(DEB_ARCH).deb

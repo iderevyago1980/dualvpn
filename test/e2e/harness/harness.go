@@ -45,6 +45,11 @@ type Options struct {
 	Insecure     bool
 	ReadyTimeout time.Duration
 	Logf         func(string, ...any)
+
+	// OnTwoFA вызывается, когда сервер запросил второй фактор: получает
+	// идентификатор туннеля и текст запроса, возвращает код. Без него
+	// туннель с 2FA (все боевые эндпоинты) висит до таймаута готовности.
+	OnTwoFA func(tunnelID, message string) (string, error)
 }
 
 // Run регистрирует туннели, запускает их и ждёт готовности всех.
@@ -66,7 +71,7 @@ func Run(ctx context.Context, opts Options) (*vpn.Manager, []string, error) {
 	// Стартуем в отдельной горутине: StartAll блокируется до Connect каждого.
 	go m.StartAll(ctx)
 
-	if err := waitReady(ctx, m, ids, opts.ReadyTimeout, opts.Logf); err != nil {
+	if err := waitReady(ctx, m, ids, opts.ReadyTimeout, opts.Logf, opts.OnTwoFA); err != nil {
 		m.StopAll()
 		return nil, nil, err
 	}
@@ -75,7 +80,8 @@ func Run(ctx context.Context, opts Options) (*vpn.Manager, []string, error) {
 
 // waitReady потребляет события менеджера (для лога) и опрашивает Status,
 // пока все туннели не станут connected либо не выйдет таймаут.
-func waitReady(ctx context.Context, m *vpn.Manager, ids []string, timeout time.Duration, logf func(string, ...any)) error {
+func waitReady(ctx context.Context, m *vpn.Manager, ids []string, timeout time.Duration, logf func(string, ...any),
+	onTwoFA func(string, string) (string, error)) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(200 * time.Millisecond)
@@ -85,6 +91,17 @@ func waitReady(ctx context.Context, m *vpn.Manager, ids []string, timeout time.D
 		select {
 		case ev := <-m.Events():
 			logf("[%s] %s: %s", ev.TunnelID, ev.Event.Type, ev.Event.Message)
+			if ev.Event.Type == sslcon.Event2FARequired && onTwoFA != nil {
+				// Ввод кода блокирует цикл событий — второй туннель в это
+				// время просто копит события в буфере канала менеджера.
+				code, err := onTwoFA(ev.TunnelID, ev.Event.Message)
+				if err != nil {
+					return fmt.Errorf("2FA для %q: %w", ev.TunnelID, err)
+				}
+				if err := m.Submit2FA(ev.TunnelID, code); err != nil {
+					return fmt.Errorf("отправка 2FA-кода для %q: %w", ev.TunnelID, err)
+				}
+			}
 		case <-tick.C:
 			allUp := true
 			for _, id := range ids {

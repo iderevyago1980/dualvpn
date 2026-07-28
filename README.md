@@ -5,17 +5,25 @@
 ## Архитектура
 
 - **Язык**: Go
-- **VPN-протокол**: OpenConnect (AnyConnect SSL/TLS)
+- **VPN-протокол**: Cisco AnyConnect (SSL/TLS + DTLS) — собственный клиент на Go
+  (форк [sslcon](https://github.com/tlslink/sslcon)); внешний бинарь `openconnect`
+  **не** используется
 - **Два режима**: TUN (нужны админ-права) и SOCKS5 (без админа)
-- **UI**: Wails v3 (Go backend + HTML/CSS/JS frontend, системный трей)
+- **UI**: Wails v2 (Go backend + HTML/CSS/JS frontend, системный трей)
 
 ## Эндпоинты
 
-1. **VPN-1**: `vpn1.example.com` — группы: Group-2FA, Group-Partners-2FA, VPN-1, Partners, Group-Ext
-2. **VPN-2**: `vpn2.example.com` — группы: RA, RA-MFA, RA-Full
+1. **VPN-1**: `vpn1.example.com`
+2. **VPN-2**: `vpn2.example.com`
 
 Оба — Cisco ASA, AnyConnect SSL/TLS, без SAML/SSO.
-При подключении: выбор группы → логин → пароль → 2FA код (TOTP).
+При подключении: выбор группы → логин → пароль → 2FA-код (TOTP), если сервер
+его запросит.
+
+Имя группы должно **буквально** совпадать с алиасом на сервере. Список групп
+не зашит в приложение — он запрашивается у самого сервера: кнопка
+«↻ с сервера» рядом с полем группы, либо `dualvpn-harness -groups`. Пустая
+группа означает «использовать группу сервера по умолчанию».
 
 ## Режимы работы
 
@@ -24,6 +32,8 @@
 - Каждый туннель поднимает локальный SOCKS5-прокси (1080, 1081)
 - Приложения маршрутизируются через прокси вручную
 - Не нужен TUN-драйвер
+- Имена разрешаются DNS-серверами шлюза **внутри туннеля**; зоны из
+  split-DNS не уходят в системный резолвер
 
 ### TUN (с админскими правами)
 - wintun.dll (Windows) / /dev/net/tun (Linux)
@@ -35,25 +45,57 @@
 - При запуске проверяет наличие админ-прав
 - Если админ → TUN режим
 - Если нет → SOCKS5 режим
-- Авто-fallback TUN→SOCKS5 при ошибке
+- Режим можно сменить вручную в UI; смена останавливает все туннели.
+  Автоматического отката TUN→SOCKS5 при ошибке нет
 
 ## Структура проекта
 
 ```
 dualvpn/
-├── main.go                 # Точка входа
+├── main.go                 # Точка входа (встраивает frontend и config.example.toml)
 ├── go.mod
 ├── internal/
 │   ├── config/             # TOML конфиг, загрузка/сохранение
-│   ├── vpn/                # OpenConnect протокол, handshake, 2FA
-│   ├── socks5/             # SOCKS5-сервер + gVisor netstack
+│   ├── vpn/                # Менеджер туннелей
+│   │   └── sslcon/         # Клиент AnyConnect: auth, 2FA, CSTP/DTLS
+│   ├── socks5/             # SOCKS5-сервер + gVisor netstack + DNS туннеля
 │   ├── tun/                # TUN-адаптеры (wintun/tun)
-│   ├── routing/            # Route table management
+│   ├── routing/            # Маршруты split-tunnel (netsh/route)
+│   ├── mockasa/            # Эмулятор Cisco ASA для тестов
 │   └── ui/                 # Wails frontend bindings
+├── cmd/
+│   ├── dualvpn-harness/    # Headless-драйвер: подключение, DNS, группы
+│   └── dualvpn-tuncheck/   # Самопроверка TUN-пути (нужны админ-права)
 ├── frontend/
 │   ├── index.html          # UI (sidebar layout, тёмная тема)
 │   ├── style.css
 │   └── app.js
-├── wintun.dll              # Windows TUN-драйвер (в комплекте)
-└── config.example.toml     # Пример конфигурации
+└── config.example.toml     # Шаблон конфигурации (встраивается в бинарь)
+```
+
+`wintun.dll` в репозиторий не коммитится: его скачивает `make wintun`
+(`build/windows/fetch-wintun.sh`) и кладёт рядом с exe — драйвер грузится
+только из каталога программы или System32.
+
+## Сборка и запуск на Windows
+
+```bash
+go build -tags desktop,production -ldflags "-H=windowsgui -s -w" -o bin/DualVPN.exe .
+```
+
+`wintun.dll` нужен только для TUN-режима; SOCKS5 работает без него и без
+прав администратора.
+
+**Smart App Control.** На Windows 11 с включённым Smart App Control
+неподписанные сборки блокируются по репутации файла («заблокирован политикой
+Device Guard»). Для разработки помогает `go run ./cmd/...`, для раздачи
+пользователям нужна подпись сертификатом.
+
+## Диагностика без GUI
+
+```bash
+go run ./cmd/dualvpn-harness -config config.toml -groups                 # какие группы предлагает сервер
+go run ./cmd/dualvpn-harness -config config.toml -otp 123456 -hold 30s   # поднять туннели и подержать
+go run ./cmd/dualvpn-harness -config config.toml -resolve host.corp.example   # проверить DNS внутри туннеля
+go build -o bin/dualvpn-tuncheck.exe ./cmd/dualvpn-tuncheck              # TUN: адаптер + маршруты (от админа)
 ```
