@@ -55,9 +55,11 @@ func TestBuildAddRouteCommand(t *testing.T) {
 			want: []string{"route", "add", "-net", "192.168.1.0", "netmask", "255.255.255.0", "gw", "10.8.0.1", "dev", "tun0"},
 		},
 		{
+			// route add ... IF <имя> невалидна: IF принимает индекс интерфейса.
 			name: "windows",
 			os:   "windows",
-			want: []string{"route", "add", "192.168.1.0", "mask", "255.255.255.0", "10.8.0.1", "IF", "tun0"},
+			want: []string{"netsh", "interface", "ipv4", "add", "route",
+				"prefix=192.168.1.0/24", "interface=tun0", "store=active"},
 		},
 	}
 
@@ -86,7 +88,8 @@ func TestBuildDeleteRouteCommand(t *testing.T) {
 		{
 			name: "windows",
 			os:   "windows",
-			want: []string{"route", "delete", "192.168.1.0", "mask", "255.255.255.0", "10.8.0.1", "IF", "tun0"},
+			want: []string{"netsh", "interface", "ipv4", "delete", "route",
+				"prefix=192.168.1.0/24", "interface=tun0", "store=active"},
 		},
 	}
 

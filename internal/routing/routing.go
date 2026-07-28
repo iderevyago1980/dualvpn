@@ -28,6 +28,12 @@ func ParseCIDR(cidr string) (network, mask string, err error) {
 
 // BuildAddRouteCommand формирует команду добавления маршрута для указанной ОС.
 // Возвращает nil при некорректном CIDR или неподдерживаемой ОС.
+//
+// Windows: используется netsh, а не `route add`. У `route add` аргумент IF
+// принимает индекс интерфейса, а не имя, — передача имени TUN-адаптера
+// («vpn1») молча ломала все split-маршруты. netsh принимает имя
+// напрямую, а без nexthop маршрут ставится on-link, что и нужно для
+// point-to-point TUN с адресом /32 (шлюза в такой сети нет).
 func BuildAddRouteCommand(goos, cidr, gateway, iface string) []string {
 	network, mask, err := ParseCIDR(cidr)
 	if err != nil {
@@ -37,9 +43,17 @@ func BuildAddRouteCommand(goos, cidr, gateway, iface string) []string {
 	case "linux":
 		return []string{"route", "add", "-net", network, "netmask", mask, "gw", gateway, "dev", iface}
 	case "windows":
-		return []string{"route", "add", network, "mask", mask, gateway, "IF", iface}
+		return []string{"netsh", "interface", "ipv4", "add", "route",
+			"prefix=" + normalizeCIDR(network, mask), "interface=" + iface, "store=active"}
 	}
 	return nil
+}
+
+// normalizeCIDR собирает префикс вида 192.168.1.0/24 из пары сеть+маска —
+// netsh принимает маршрут только в таком виде.
+func normalizeCIDR(network, mask string) string {
+	ones, _ := net.IPMask(net.ParseIP(mask).To4()).Size()
+	return fmt.Sprintf("%s/%d", network, ones)
 }
 
 // BuildDeleteRouteCommand формирует команду удаления маршрута для указанной ОС.
@@ -53,7 +67,8 @@ func BuildDeleteRouteCommand(goos, cidr, gateway, iface string) []string {
 	case "linux":
 		return []string{"route", "del", "-net", network, "netmask", mask, "gw", gateway, "dev", iface}
 	case "windows":
-		return []string{"route", "delete", network, "mask", mask, gateway, "IF", iface}
+		return []string{"netsh", "interface", "ipv4", "delete", "route",
+			"prefix=" + normalizeCIDR(network, mask), "interface=" + iface, "store=active"}
 	}
 	return nil
 }

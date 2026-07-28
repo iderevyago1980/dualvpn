@@ -68,12 +68,35 @@ func configureWindows(cfg Config) error {
 		{"netsh", "interface", "ipv4", "set", "subinterface",
 			cfg.Name, "mtu=" + strconv.Itoa(cfg.MTU), "store=active"},
 	}
+	cmds = append(cmds, dnsCommands(cfg)...)
 	for _, argv := range cmds {
 		if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %w (%s)", argv, err, out)
 		}
 	}
 	return nil
+}
+
+// dnsCommands назначает интерфейсу DNS-серверы, выданные шлюзом. Без этого
+// в TUN-режиме имена внутренней сети не разрешаются: система продолжает
+// спрашивать провайдерский DNS, которому корпоративные зоны неизвестны.
+// validate=no — проверка достижимости сервера идёт до появления маршрутов и
+// ложно проваливается.
+func dnsCommands(cfg Config) [][]string {
+	var cmds [][]string
+	for i, srv := range cfg.DNS {
+		if srv == "" {
+			continue
+		}
+		if i == 0 {
+			cmds = append(cmds, []string{"netsh", "interface", "ipv4", "set", "dnsservers",
+				"name=" + cfg.Name, "static", srv, "primary", "validate=no"})
+			continue
+		}
+		cmds = append(cmds, []string{"netsh", "interface", "ipv4", "add", "dnsservers",
+			"name=" + cfg.Name, srv, "index=" + strconv.Itoa(i+1), "validate=no"})
+	}
+	return cmds
 }
 
 // wintunRWC оборачивает адаптер и сессию Wintun в io.ReadWriteCloser.

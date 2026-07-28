@@ -13,9 +13,10 @@ import (
 
 // Config — параметры создаваемого TUN-адаптера.
 type Config struct {
-	Name    string // Имя интерфейса (например, dualvpn0)
-	Address string // IPv4-адрес интерфейса (например, 10.8.0.2)
-	MTU     int    // MTU туннеля (обычно 1400 для AnyConnect)
+	Name    string   // Имя интерфейса (например, dualvpn0)
+	Address string   // IPv4-адрес интерфейса (например, 10.8.0.2)
+	MTU     int      // MTU туннеля (обычно 1400 для AnyConnect)
+	DNS     []string // DNS-серверы VPN (X-CSTP-DNS); пусто — не трогать настройки
 }
 
 // Validate проверяет корректность конфигурации адаптера.
