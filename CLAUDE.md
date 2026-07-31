@@ -21,6 +21,13 @@ go test ./internal/... ./test/... -count=3
 - **`-race` на Windows недоступен** без C-компилятора (`cgo: C compiler "gcc" not found`). Гонки ловятся на Linux; здесь ограничивайся `-count=3`.
 - `wintun.dll` должен лежать **рядом с exe**: он грузится через `LoadLibraryEx` с флагами `SEARCH_APPLICATION_DIR|SEARCH_SYSTEM32`, поэтому ни PATH, ни рабочий каталог не помогут. Отсюда же вывод: `go test` не может проверить TUN — тестовый бинарь лежит во временном каталоге. Для проверки есть `cmd/dualvpn-tuncheck` (собирается в `bin/`, запускать от администратора).
 - **Smart App Control** (`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState = 1`) блокирует неподписанные exe по репутации: запуск падает с «заблокирован политикой Device Guard», в журнале `Microsoft-Windows-CodeIntegrity/Operational` появляется событие 3077. Особенно достаётся файлам из `%TEMP%`, поэтому **`go test` падает случайным образом** с `fork/exec ...: An Application Control policy has blocked this file` при полностью рабочем коде — не принимай это за дефект. Надёжный прогон: `test/run-windows.sh` (компилирует тесты в `bin/tests` и запускает из каталога пакета). Для раздачи пользователям нужна подпись сертификатом; отключение Smart App Control необратимо (обратно — только переустановкой Windows).
+- **Один тест на Windows**: `run-windows.sh` принимает только список пакетов. Для одного теста собери бинарь и запусти из каталога пакета (иначе относительные пути к файлам репозитория не найдутся):
+  ```bash
+  go test -c -o bin/tests/pac.test.exe ./internal/pac
+  (cd internal/pac && ../../bin/tests/pac.test.exe -test.run TestScriptRoutes -test.v)
+  ```
+- **Иконка exe** — ресурс `rsrc_windows_amd64.syso` в корне: линкер подхватывает его сам, в том числе при кросс-сборке с Linux. Пересобирается только после правки эмблемы (см. «Эмблема» в разделе сборки).
+- **Кодировка NSIS**: `installer.nsi` обязан быть в UTF-8 **с BOM**. Без BOM makensis читает файл как ANSI (`Processing script file: ... (ACP)` в выводе), и все русские строки установщика — надпись на финальной странице, имя раздела, имя ярлыка «Удалить DualVPN» — попадают в него искажёнными. Тот же капкан у PowerShell 5.1: `.ps1` с кириллицей без BOM падает с ошибками разбора.
 - **Подпись**: `build/windows/sign.ps1` (`Set-AuthenticodeSignature`, signtool из SDK не нужен). Релизы подписаны самоподписанным сертификатом — он даёт доверенную подпись только там, где установлен вручную или через GPO, и **не снимает блокировку Smart App Control/SmartScreen**: те смотрят на репутацию издателя. Публичная раздача без предупреждений требует OV/EV-сертификата (с 2023 — аппаратный токен или облачный HSM) либо Azure Trusted Signing.
 
 ### Linux
@@ -47,15 +54,46 @@ make build-windows   # bin/DualVPN.exe — кросс-компиляция, CGO_
 make installer       # bin/DualVPN-Setup-<VERSION>.exe — NSIS-инсталлятор (makensis, кросс-сборка на Linux)
 make build           # полноценная Wails-сборка под Windows (wails build)
 ```
+`make test` — это `go test ./internal/... -v`: без `-count`, без `./test/...` и без `-race`. Полный прогон перед коммитом делай командами выше, а не этой целью.
+
 **Не запускай `wails dev` / `make dev`** — на сервере нет GUI. Инсталлятор Windows — per-user (`%LOCALAPPDATA%`), без прав администратора; кладёт `wintun.dll` рядом с exe. Версия задаётся `make installer VERSION=x.y.z` (та же переменная у `make deb`).
 
 **`.deb` (Debian/Ubuntu)**: `make deb` собирает `build-linux` и пакует бинарь в `/usr/bin/dualvpn` + `.desktop`-ярлык (`build/linux/dualvpn.desktop`) + иконку (`build/linux/dualvpn.svg`). Секция `Depends` (шаблон `build/linux/control.in`) объявляет `libwebkit2gtk-4.1-0`, `libgtk-3-0t64|libgtk-3-0`, `libayatana-appindicator3-1` — **без них голый бинарь на чистой системе молча не стартует** (`cannot open shared object file`); это была одна из причин «ничего не запускается». Собирается на Linux через `dpkg-deb --root-owner-group` (root не нужен).
+
+**Эмблема** (`make icons` → `go run build/icon/main.go`): рисуется кодом из той же картинки, что и `build/linux/dualvpn.svg`, и раскладывается в `build/appicon.png`, `build/windows/icon.ico` (16–256) и копии в `internal/icons/` для `go:embed` (embed берёт файлы только из своего пакета). Отсюда иконка exe, трея, ярлыков и установщика. После правки эмблемы ресурс пересобирается: `GOBIN=$PWD/bin go install github.com/akavel/rsrc@latest`, затем `bin/rsrc -ico build/windows/icon.ico -o rsrc_windows_amd64.syso`. **Smart App Control блокирует `go run пакет@latest`** (бинарь из `%TEMP%`) — ставить через `go install` в `bin/` и запускать оттуда.
+
+**Иконка в трее Windows 11 не видна по умолчанию**: система прячет все новые значки в переполнение (за шевроном «^»), в `HKCU\Control Panel\NotifyIconSettings\<id>` поле `IsPromoted` пустое. Кодом это не решается — пользователь закрепляет значок вручную.
 
 **Стартовый конфиг**: эндпоинтов и групп в Go-коде нет — `config.Default()` пустой. При первом запуске `config.CreateFrom` разворачивает встроенный (`//go:embed config.example.toml` в `main.go`) шаблон байт-в-байт, вместе с комментариями. Захардкоженный ранее список в `Default()` разошёлся с реальностью и ломал подключение ещё до логина.
 
 **Путь конфига** (`main.go: configPath`): приоритет `DUALVPN_CONFIG` → локальный `config.toml` в cwd (dev) → `config.DefaultPath()` = `~/.config/dualvpn/config.toml`. Раньше путь был жёстко относительным `"config.toml"`, и при запуске из меню (cwd = `/`) запись падала → `Fatalf` → приложение не стартовало. При запуске из репозитория поведение прежнее (подхватывается `./config.toml`).
 
 - Go 1.26.5 в `/usr/local/go` (в go.mod — `go 1.26.3`).
+
+### Диагностический харнесс (`cmd/dualvpn-harness`)
+
+Консольный прогон всего пути подключения без GUI — основной инструмент для проверки на живых серверах и на стенде:
+
+```bash
+-config config.toml   # какой конфиг брать
+-mode socks5|tun      # tun требует прав администратора/root
+-groups               # только показать группы, предлагаемые серверами, и выйти
+-otp 123456           # код 2FA; пусто — спросит со stdin
+-resolve host1,host2  # разрешить имена через DNS каждого туннеля (печатает источник ответа)
+-pac 1088             # поднять раздачу PAC (-1 — свободный порт) и напечатать скрипт
+-hold 30s             # держать туннели поднятыми после проверок
+-insecure             # по умолчанию true — это стендовое значение, для боевых серверов выключай
+```
+
+Изоляцию туннелей харнесс проверяет сам (`checkIsolation`), пока мосты ещё живы: снаружи после выхода процесса проверять нечего.
+
+### Релиз
+
+1. `VERSION` в `Makefile` — единственный источник версии; она попадает в бинарь через `-X dualvpn/internal/ui.version` (`VERSION_LDFLAG`). Без этого флага UI показывает `dev`.
+2. Подписать сборки (`build/windows/sign.ps1`) до упаковки — иначе в архиве окажется неподписанный exe.
+3. Коммит `release: версия x.y.z (...)` + аннотированный тег `vx.y.z`.
+4. GitHub-релиз: **`gh` на этой машине не установлен**. Рабочий путь — REST API с токеном из Git Credential Manager: `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` даёт `password=<токен>`, дальше `POST /repos/:owner/:repo/releases` и `POST uploads.github.com/.../assets?name=`. Заменить ассет нельзя — только удалить старый и загрузить новый.
+5. `user.name`/`user.email` глобально не настроены; в этом репозитории заданы локально. На чистой машине коммит упадёт с `Author identity unknown`.
 
 ## Архитектура
 
@@ -104,6 +142,15 @@ make build           # полноценная Wails-сборка под Windows 
 - **TUN**: DNS-серверы назначаются адаптеру через `netsh ... set dnsservers ... validate=no` (`tun_windows.go`).
 - Диагностика: `dualvpn-harness -resolve имя1,имя2` печатает адрес, источник (`dns-vpn` / `dns-система`) и серверы туннеля.
 
+### Windows: системная интеграция
+
+- **`internal/oscmd`** — единая обёртка над внешними утилитами (`netsh`, `route`, `ip`, `powershell`). Ставит `CREATE_NO_WINDOW`: приложение собрано с `-H=windowsgui`, и без этого каждый вызов мигал бы чёрным окном консоли. Плюс таймаут — зависший `netsh` иначе вешает подключение навсегда. Любой новый вызов консольной утилиты должен идти через `oscmd`, а не через `exec.Command`.
+- **`internal/winproxy`** — системный прокси per-user (`HKCU\...\Internet Settings\AutoConfigURL` + оповещение WinINET). Кнопка «Применить прокси» в режиме SOCKS5: без неё туннель поднимался, но трафик в него не шёл, пока пользователь не пропишет PAC в браузере вручную. **WinINET кэширует PAC по адресу** и не перечитывает его при изменении содержимого, поэтому `Manager.SetPACChanged` → `App.onPACChanged` переприменяет настройку при каждом подключении/отключении, добавляя к адресу возрастающий `?v=N`. Без этого туннель, подключённый после нажатия кнопки, оставался вне прокси.
+- **`internal/elevate`** — перезапуск через `ShellExecute` с глаголом `runas` (UAC). Повысить права работающему процессу Windows не даёт, поэтому переход в TUN из обычного запуска возможен только так. `App.syncPAC` при этом поднимает PAC в SOCKS5 и снимает прокси с раздачей при уходе в TUN.
+- **`internal/icons`** — эмблема, встроенная в бинарь (ICO для трея Windows, PNG для Linux).
+
+Туннели добавляются и удаляются в интерфейсе (сайдбар и шапка карточки). Имя туннеля — его идентификатор: под ним живут статусы, журнал, пункты трея и регистрация в менеджере, поэтому `config.Validate` отвергает одноимённые туннели, а переименование в форме переносит состояние на новое имя.
+
 ### Аутентификация и 2FA (`sslcon/auth.go`)
 `InitAuth` (TLS + список групп) → `PasswordAuth`. При запросе второго фактора `PasswordAuth` возвращает `ErrNeeds2FA`; `run()` эмитит `Event2FARequired` и **блокируется на канале `twoFAOK`**, пока `Submit2FA(code)` (вызванная из UI/менеджера) не пройдёт. Код 2FA (TOTP) идёт в `<password>` challenge-формы, как у настоящего AnyConnect.
 
@@ -113,8 +160,21 @@ make build           # полноценная Wails-сборка под Windows 
 ### Тестовый эмулятор (`internal/mockasa`)
 Мок Cisco ASA/AnyConnect для интеграционных тестов **без реальных серверов**: aggregate auth + 2FA-challenge + CSTP-туннель (STF-фреймы, DPD) + «внутренняя сеть» за шлюзом на gVisor netstack (echo/HTTP-сервисы). Тесты гоняют весь путь `auth → 2FA → CSTP → SOCKS5-мост → хост внутренней сети → эхо`, в т.ч. два туннеля одновременно с проверкой изоляции. Это основной способ проверять логику подключения локально.
 
+### E2E-стенд (`test/e2e`, только Linux)
+
+Четыре уровня проверки, от быстрого к дорогому — все они гоняют `dualvpn-harness`, а не GUI:
+
+- **`make e2e`** — host-прогон: два инстанса ocserv в docker (`test/e2e/backends/ocserv`, свои сертификаты и конфиги `ocserv-a/b.conf`), затем харнесс в SOCKS5 и в TUN через `sudo`.
+- **`make e2e-vm`** — то же внутри настоящей Linux-VM (QEMU/KVM): гость ставит `.deb`, гоняет харнесс и GUI-smoke, пишет `result.txt`. Проверяет ровно то, что ломалось у пользователей: зависимости пакета и запуск из меню.
+- **`make e2e-win-vm`** — Windows 11 VM с автоустановкой (`autounattend.xml`).
+- **`make e2e-win-ready`** — тот же прогон на заранее подготовленном образе (`work/srv.qcow2`) с offline-инъекцией артефактов; быстрее и надёжнее автоустановки.
+
+⚠️ **Стенд не заменяет проверку на живой ASA.** ocserv — не Cisco ASA: он нетребователен к `<device-id>`, к форме ответа на challenge и к `<opaque>` (см. «Протокол Cisco ASA»). Весь этот класс дефектов проходил e2e зелёным и падал на боевых серверах. Стенд отвечает на вопрос «работает ли наш packet flow, режимы, изоляция и упаковка», а не «поймёт ли нас ASA».
+
 ### Легаси
 `internal/vpn/openconnect.go` — **мёртвый код**: обёртка над бинарём `openconnect` + `ocproxy`, оставшаяся от первой итерации. Активный путь целиком нативный (sslcon), внешний `openconnect` не запускается. README.md/SPEC.md местами устарели (пишут «OpenConnect», «Wails v3») — верно: нативный Go-клиент, Wails **v2**.
+
+`spikes/003-sslcon-cisco-asa/` — отдельный Go-модуль (`spike-sslcon`) с исследовательским прототипом; в основную сборку не входит, `./...` его не видит. Файлы `.hermes`, `.task-*.txt` в корне — заметки прошлых агентских прогонов, не конфигурация.
 
 ## Эндпоинты (проверены подключением 2026-07-27)
 
