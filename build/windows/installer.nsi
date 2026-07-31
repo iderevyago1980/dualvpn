@@ -1,4 +1,4 @@
-; DualVPN — установщик для Windows (NSIS).
+﻿; DualVPN — установщик для Windows (NSIS).
 ;
 ; Ставится per-user (в %LOCALAPPDATA%), без прав администратора — под
 ; философию SOCKS5-режима, который работает без админа. На Windows сейчас
@@ -46,6 +46,10 @@ VIAddVersionKey "LegalCopyright" "${COMPANY}"
 
 ; --- Интерфейс ---
 !define MUI_ABORTWARNING
+; Эмблема приложения на самом установщике и деинсталляторе (иконка exe и
+; ярлыков берётся из ресурсов самого DualVPN.exe).
+!define MUI_ICON "${SRCROOT}\build\windows\icon.ico"
+!define MUI_UNICON "${SRCROOT}\build\windows\icon.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXENAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APPNAME}"
 
