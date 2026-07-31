@@ -447,6 +447,21 @@ func (t *Tunnel) payloadInToTun(dev *tundev.Device, cSess *ConnSession) {
 // Идемпотентен.
 func (t *Tunnel) Close() error {
 	t.closeOnce.Do(func() {
+		// Маршруты снимаем ДО закрытия сессии. Закрытие будит горутины
+		// перекачки пакетов, а их defer закрывает TUN-устройство, то есть
+		// удаляет адаптер. После этого netsh не может найти интерфейс по
+		// имени и каждое удаление маршрута падает с ERROR_INVALID_NAME
+		// («синтаксическая ошибка в имени файла»): десятки ложных ошибок в
+		// журнале на каждом отключении, за которыми не видно настоящих.
+		if t.tunDev != nil {
+			t.removeRoutes(t.tunDev.Name)
+			// Правила NRPT переживают удаление интерфейса и без явного
+			// снятия продолжили бы направлять зоны в исчезнувший DNS.
+			if err := nrpt.Remove(t.tunDev.Name); err != nil {
+				base.Error("не удалось снять правила DNS для "+t.tunDev.Name+":", err)
+			}
+		}
+
 		t.session.Close()
 		if t.tlsConn != nil {
 			_ = t.tlsConn.Close()
@@ -457,12 +472,6 @@ func (t *Tunnel) Close() error {
 		}
 		t.mu.Unlock()
 		if t.tunDev != nil {
-			t.removeRoutes(t.tunDev.Name) // снять маршруты до удаления интерфейса
-			// Правила NRPT переживают удаление интерфейса и без явного
-			// снятия продолжили бы направлять зоны в исчезнувший DNS.
-			if err := nrpt.Remove(t.tunDev.Name); err != nil {
-				base.Error("не удалось снять правила DNS для "+t.tunDev.Name+":", err)
-			}
 			_ = t.tunDev.Close()
 		}
 	})
