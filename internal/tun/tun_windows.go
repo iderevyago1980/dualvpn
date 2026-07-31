@@ -5,12 +5,13 @@ package tun
 import (
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"sync"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wintun"
+
+	"dualvpn/internal/oscmd"
 )
 
 // wintunRingCapacity — ёмкость кольцевого буфера сессии wintun (4 МиБ).
@@ -70,7 +71,7 @@ func configureWindows(cfg Config) error {
 	}
 	cmds = append(cmds, dnsCommands(cfg)...)
 	for _, argv := range cmds {
-		if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
+		if out, err := oscmd.Run(oscmd.DefaultTimeout, argv[0], argv[1:]...); err != nil {
 			return fmt.Errorf("%v: %w (%s)", argv, err, out)
 		}
 	}
@@ -185,8 +186,8 @@ func (w *wintunRWC) Write(p []byte) (int, error) {
 // Close завершает сессию и удаляет адаптер. Идемпотентен.
 func (w *wintunRWC) Close() error {
 	w.closeOnce.Do(func() {
-		close(w.closeChan)  // разбудить блокирующий Read
-		w.session.End()     // ReceivePacket вернёт ошибку/EOF
+		close(w.closeChan) // разбудить блокирующий Read
+		w.session.End()    // ReceivePacket вернёт ошибку/EOF
 		_ = w.adapter.Close()
 	})
 	return nil

@@ -5,10 +5,11 @@ package tun
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 
 	"golang.org/x/sys/unix"
+
+	"dualvpn/internal/oscmd"
 )
 
 // Create создаёт TUN-адаптер: открывает /dev/net/tun, привязывает интерфейс
@@ -61,7 +62,7 @@ func configureLinux(name string, cfg Config) error {
 		{"ip", "link", "set", "dev", name, "up"},
 	}
 	for _, argv := range cmds {
-		if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
+		if out, err := oscmd.Run(oscmd.DefaultTimeout, argv[0], argv[1:]...); err != nil {
 			return fmt.Errorf("%v: %w (%s)", argv, err, out)
 		}
 	}

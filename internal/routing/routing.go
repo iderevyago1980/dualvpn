@@ -7,9 +7,10 @@ package routing
 import (
 	"fmt"
 	"net"
-	"os/exec"
 	"runtime"
 	"strings"
+
+	"dualvpn/internal/oscmd"
 )
 
 // ParseCIDR разбирает CIDR-нотацию (например, "192.168.1.0/24")
@@ -104,7 +105,7 @@ func runRoute(argv []string, cidr string) error {
 	if argv == nil {
 		return fmt.Errorf("не удалось собрать команду маршрута для %q (ОС %s)", cidr, runtime.GOOS)
 	}
-	out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+	out, err := oscmd.Run(oscmd.DefaultTimeout, argv[0], argv[1:]...)
 	if err != nil {
 		return fmt.Errorf("%s: %w (%s)", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
 	}

@@ -4,8 +4,10 @@ package nrpt
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
+	"time"
+
+	"dualvpn/internal/oscmd"
 )
 
 // Apply создаёт правила NRPT для туннеля, предварительно сняв старые с той
@@ -42,11 +44,15 @@ func Remove(tunnelID string) error {
 	return nil
 }
 
+// psTimeout — powershell.exe стартует медленнее netsh (загрузка среды), но
+// правила NRPT всё равно применяются за секунды: минута с запасом отделяет
+// нормальную работу от зависания.
+const psTimeout = 60 * time.Second
+
 // runPS выполняет команду PowerShell. Cmdlet'ы DnsClient доступны только
 // через PowerShell — соответствующего консольного аналога у netsh нет.
 func runPS(script string) (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	out, err := cmd.CombinedOutput()
+	out, err := oscmd.Run(psTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	return strings.TrimSpace(string(out)), err
 }
 
