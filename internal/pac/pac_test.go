@@ -12,8 +12,8 @@ import (
 func TestScriptRoutesByTunnel(t *testing.T) {
 	script := Script([]Tunnel{
 		{
-			Name: "MT", SocksPort: 1081,
-			Domains: []string{"corp.example", ".vpn2-lab.example", "6.10.in-addr.arpa"},
+			Name: "Туннель", SocksPort: 1081,
+			Domains: []string{"corp.example", ".lab.example", "0.10.in-addr.arpa"},
 			Subnets: []string{"10.6.0.0/255.255.0.0"},
 		},
 		{
@@ -25,7 +25,7 @@ func TestScriptRoutesByTunnel(t *testing.T) {
 
 	want := []string{
 		`dnsDomainIs(host, ".corp.example")`,
-		`dnsDomainIs(host, ".vpn2-lab.example")`,
+		`dnsDomainIs(host, ".lab.example")`,
 		`SOCKS5 127.0.0.1:1081`,
 		`dnsDomainIs(host, ".lab.example")`,
 		`SOCKS5 127.0.0.1:1080`,
@@ -71,7 +71,7 @@ func TestServerServesScript(t *testing.T) {
 	}
 	defer s.Close()
 
-	s.SetTunnels([]Tunnel{{Name: "MT", SocksPort: 1081, Domains: []string{"corp.example"}}})
+	s.SetTunnels([]Tunnel{{Name: "Туннель", SocksPort: 1081, Domains: []string{"corp.example"}}})
 
 	url := s.URL()
 	if !strings.HasSuffix(url, "/proxy.pac") {

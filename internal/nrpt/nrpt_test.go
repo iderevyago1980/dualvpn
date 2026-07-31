@@ -4,8 +4,8 @@ import "testing"
 
 func TestBuildRules(t *testing.T) {
 	rules := BuildRules(
-		[]string{"corp.example", ".intranet.example", "CORP.EXAMPLE", "", "6.10.in-addr.arpa"},
-		[]string{"10.0.0.11", " ", "10.0.0.14"},
+		[]string{"corp.example", ".intranet.example", "CORP.EXAMPLE", "", "0.10.in-addr.arpa"},
+		[]string{"10.0.0.11", " ", "10.0.0.12"},
 	)
 
 	if len(rules) != 3 {
@@ -13,12 +13,12 @@ func TestBuildRules(t *testing.T) {
 	}
 
 	// Ведущая точка означает «зона и все поддомены».
-	want := map[string]bool{".corp.example": true, ".intranet.example": true, ".6.10.in-addr.arpa": true}
+	want := map[string]bool{".corp.example": true, ".intranet.example": true, ".0.10.in-addr.arpa": true}
 	for _, r := range rules {
 		if !want[r.Namespace] {
 			t.Errorf("неожиданная зона %q", r.Namespace)
 		}
-		if len(r.Servers) != 2 || r.Servers[0] != "10.0.0.11" || r.Servers[1] != "10.0.0.14" {
+		if len(r.Servers) != 2 || r.Servers[0] != "10.0.0.11" || r.Servers[1] != "10.0.0.12" {
 			t.Errorf("серверы правила %q = %v", r.Namespace, r.Servers)
 		}
 	}
@@ -27,8 +27,8 @@ func TestBuildRules(t *testing.T) {
 // Обратные зоны нужны для разрешения адресов внутренней сети в имена —
 // в отличие от PAC, здесь их отбрасывать нельзя.
 func TestBuildRulesKeepsReverseZones(t *testing.T) {
-	rules := BuildRules([]string{"124.200.81.in-addr.arpa"}, []string{"10.0.0.11"})
-	if len(rules) != 1 || rules[0].Namespace != ".124.200.81.in-addr.arpa" {
+	rules := BuildRules([]string{"1.168.192.in-addr.arpa"}, []string{"10.0.0.11"})
+	if len(rules) != 1 || rules[0].Namespace != ".1.168.192.in-addr.arpa" {
 		t.Errorf("обратная зона потеряна: %+v", rules)
 	}
 }

@@ -24,13 +24,13 @@ func testTunnelConfig(id, server, mode string) TunnelConfig {
 func TestManagerAddTunnel(t *testing.T) {
 	m := NewManager()
 
-	m.AddTunnel(testTunnelConfig("vpn1", "vpn1.example.com", "tun"))
-	m.AddTunnel(testTunnelConfig("vpn2", "vpn2.example.com", "socks5"))
+	m.AddTunnel(testTunnelConfig("tunnel-a", "vpn1.example.com", "tun"))
+	m.AddTunnel(testTunnelConfig("tunnel-b", "vpn2.example.com", "socks5"))
 
 	if len(m.tunnels) != 2 {
 		t.Fatalf("в менеджере %d туннелей, ожидалось 2", len(m.tunnels))
 	}
-	for _, id := range []string{"vpn1", "vpn2"} {
+	for _, id := range []string{"tunnel-a", "tunnel-b"} {
 		if _, ok := m.tunnels[id]; !ok {
 			t.Errorf("туннель %q не найден в менеджере", id)
 		}
@@ -46,8 +46,8 @@ func TestManagerSubmit2FA(t *testing.T) {
 	}
 
 	// Добавлен, но не запущен — клиента нет, код передать некому.
-	m.AddTunnel(testTunnelConfig("vpn1", "vpn1.example.com", "tun"))
-	if err := m.Submit2FA("vpn1", "123456"); err == nil {
+	m.AddTunnel(testTunnelConfig("tunnel-a", "vpn1.example.com", "tun"))
+	if err := m.Submit2FA("tunnel-a", "123456"); err == nil {
 		t.Error("Submit2FA для незапущенного туннеля: ожидалась ошибка, получен nil")
 	}
 }
@@ -55,9 +55,9 @@ func TestManagerSubmit2FA(t *testing.T) {
 // TestManagerStatus — до запуска туннель не подключён, режим берётся из опций.
 func TestManagerStatus(t *testing.T) {
 	m := NewManager()
-	m.AddTunnel(testTunnelConfig("vpn1", "vpn1.example.com", "tun"))
+	m.AddTunnel(testTunnelConfig("tunnel-a", "vpn1.example.com", "tun"))
 
-	connected, mode := m.Status("vpn1")
+	connected, mode := m.Status("tunnel-a")
 	if connected {
 		t.Error("Status до запуска: connected=true, ожидалось false")
 	}

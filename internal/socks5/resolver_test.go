@@ -10,9 +10,9 @@ import (
 
 // TestMatchesSplitDomain — попадание имени в зону split-DNS.
 func TestMatchesSplitDomain(t *testing.T) {
-	r := newTunnelResolver(DNSConfig{Domains: []string{"corp.example", ".intranet.example", "6.10.in-addr.arpa"}}, nil)
+	r := newTunnelResolver(DNSConfig{Domains: []string{"corp.example", ".intranet.example", "0.10.in-addr.arpa"}}, nil)
 
-	in := []string{"corp.example", "CORP.EXAMPLE", "host.corp.example", "wiki.intranet.example", "1.6.10.in-addr.arpa", "host.corp.example."}
+	in := []string{"corp.example", "CORP.EXAMPLE", "host.corp.example", "wiki.intranet.example", "1.0.10.in-addr.arpa", "host.corp.example."}
 	for _, name := range in {
 		if !r.matchesSplitDomain(name) {
 			t.Errorf("%q должно попадать в split-DNS", name)

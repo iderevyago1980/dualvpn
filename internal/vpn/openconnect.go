@@ -36,7 +36,7 @@ type Event struct {
 // Options — параметры запуска openconnect для одного туннеля.
 type Options struct {
 	Binary    string   // Путь к бинарнику openconnect (по умолчанию /usr/sbin/openconnect)
-	Server    string   // Адрес VPN-сервера (например, vpn1.example.com)
+	Server    string   // Адрес VPN-сервера (например, vpn.example.com)
 	Group     string   // Tunnel-group на ASA (--usergroup)
 	Username  string   // Логин (--user)
 	Password  string   // Пароль; отправляется в stdin на промпт "Password:"
