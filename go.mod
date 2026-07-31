@@ -23,6 +23,7 @@ require (
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/transport/v3 v3.0.1 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
+	golang.org/x/image v0.44.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 )

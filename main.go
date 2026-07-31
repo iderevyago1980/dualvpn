@@ -13,8 +13,10 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 
 	"dualvpn/internal/config"
+	"dualvpn/internal/icons"
 	"dualvpn/internal/ui"
 )
 
@@ -46,12 +48,15 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:  app.Startup,   // запускает системный трей и трансляцию событий
-		OnShutdown: app.Shutdown,  // останавливает трей и все туннели
+		OnStartup:  app.Startup,  // запускает системный трей и трансляцию событий
+		OnShutdown: app.Shutdown, // останавливает трей и все туннели
 		// Закрытие окна прячет приложение в трей; настоящий выход —
 		// пункт «Выход» в меню трея (BeforeClose тогда вернёт false).
 		OnBeforeClose: app.BeforeClose,
 		Bind:          []interface{}{app},
+		// На Windows иконку окна и панели задач даёт ресурс, вшитый в exe
+		// (rsrc_windows_amd64.syso); на Linux её нужно передать явно.
+		Linux: &linux.Options{Icon: icons.PNG()},
 	})
 	if err != nil {
 		log.Fatalf("wails: %v", err)

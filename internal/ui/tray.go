@@ -6,12 +6,7 @@
 package ui
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -19,6 +14,8 @@ import (
 	"sync"
 
 	"github.com/getlantern/systray"
+
+	"dualvpn/internal/icons"
 )
 
 // Tray — обёртка над systray: контекстное меню с управлением туннелями
@@ -164,51 +161,6 @@ func statusText(id string, connected bool) string {
 	return fmt.Sprintf("%s: %s", id, state)
 }
 
-// trayIcon возвращает байты иконки трея — синий круг 16x16.
-// systray на Windows принимает только формат ICO, поэтому там PNG
-// оборачивается в ICO-контейнер (PNG внутри ICO поддерживается с Vista).
-func trayIcon() []byte {
-	data := circlePNG()
-	if runtime.GOOS == "windows" {
-		return pngToICO(data)
-	}
-	return data
-}
-
-// circlePNG рисует синий круг 16x16 и кодирует его в PNG в памяти.
-func circlePNG() []byte {
-	const size = 16
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	blue := color.RGBA{R: 0x1e, G: 0x66, B: 0xd0, A: 0xff}
-	c := float64(size-1) / 2
-	r := float64(size)/2 - 1
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx, dy := float64(x)-c, float64(y)-c
-			if dx*dx+dy*dy <= r*r {
-				img.SetRGBA(x, y, blue)
-			}
-		}
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img) // запись в bytes.Buffer не возвращает ошибок
-	return buf.Bytes()
-}
-
-// pngToICO оборачивает PNG в минимальный ICO-контейнер с одной иконкой.
-func pngToICO(pngData []byte) []byte {
-	var buf bytes.Buffer
-	le := binary.LittleEndian
-	// ICONDIR: reserved, тип (1 = icon), число иконок.
-	_ = binary.Write(&buf, le, uint16(0))
-	_ = binary.Write(&buf, le, uint16(1))
-	_ = binary.Write(&buf, le, uint16(1))
-	// ICONDIRENTRY: 16x16, без палитры, 1 plane, 32 bpp, размер и смещение данных.
-	buf.Write([]byte{16, 16, 0, 0})
-	_ = binary.Write(&buf, le, uint16(1))
-	_ = binary.Write(&buf, le, uint16(32))
-	_ = binary.Write(&buf, le, uint32(len(pngData)))
-	_ = binary.Write(&buf, le, uint32(6+16)) // заголовок + одна запись каталога
-	buf.Write(pngData)
-	return buf.Bytes()
-}
+// trayIcon возвращает байты иконки трея — общую эмблему приложения
+// (та же, что у exe, ярлыков и установщика), встроенную в бинарь.
+func trayIcon() []byte { return icons.Tray() }

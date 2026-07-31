@@ -27,9 +27,21 @@ build-linux:
 	GOOS=linux GOARCH=amd64 $(GO) build -tags $(LINUX_TAGS) -o $(BINDIR)/dualvpn-linux
 
 # Windows-бинарник: GUI-подсистема (без консоли), урезанные symbols/DWARF.
+# Иконку exe даёт rsrc_windows_amd64.syso — линкер подхватывает его сам.
 build-windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -tags $(WINDOWS_TAGS) \
-		-ldflags "-H=windowsgui -s -w" -o $(BINDIR)/DualVPN.exe
+		-ldflags "-H=windowsgui -s -w $(VERSION_LDFLAG)" -o $(BINDIR)/DualVPN.exe
+
+# Эмблема приложения: PNG для упаковки и Linux, многоразмерный ICO для exe,
+# ярлыков и установщика, плюс копии в internal/icons для встраивания в бинарь.
+#
+# Ресурс с иконкой для exe (rsrc_windows_amd64.syso) в сборке не участвует и
+# пересобирается только после правки эмблемы:
+#   GOBIN=$(CURDIR)/bin $(GO) install github.com/akavel/rsrc@latest
+#   bin/rsrc -ico build/windows/icon.ico -o rsrc_windows_amd64.syso
+.PHONY: icons
+icons: ## Пересобрать эмблему из build/icon/main.go
+	$(GO) run build/icon/main.go
 
 build-all: build-linux build-windows
 
