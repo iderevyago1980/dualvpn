@@ -47,6 +47,12 @@ type Manager struct {
 	tunnels map[string]*tunnelState
 	events  chan ManagerEvent
 	pac     *pac.Server // необязательный: nil, пока PAC не включён
+
+	// pacChanged — необязательный обработчик изменения правил PAC
+	// (подключение/отключение туннеля). Нужен потребителю, который
+	// настраивает системный прокси: содержимое скрипта поменялось, и
+	// настройку приходится переприменять.
+	pacChanged func()
 }
 
 // NewManager создаёт пустой менеджер туннелей.
@@ -76,6 +82,20 @@ func (m *Manager) EnablePAC(port int) (string, error) {
 	return srv.URL(), nil
 }
 
+// DisablePAC останавливает раздачу PAC-файла. Идемпотентна: если раздача не
+// запущена, возвращает nil. Нужна при переходе в режим TUN, где PAC не имеет
+// смысла — трафик идёт по маршрутам системы.
+func (m *Manager) DisablePAC() error {
+	m.mu.Lock()
+	srv := m.pac
+	m.pac = nil
+	m.mu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	return srv.Close()
+}
+
 // PACURL возвращает адрес PAC-файла ("" — раздача не включена).
 func (m *Manager) PACURL() string {
 	m.mu.Lock()
@@ -98,10 +118,19 @@ func (m *Manager) PACScript() string {
 	return srv.Script()
 }
 
+// SetPACChanged задаёт обработчик изменения правил PAC. Вызывается вне
+// блокировок менеджера, поэтому обработчик вправе обращаться к его методам.
+func (m *Manager) SetPACChanged(fn func()) {
+	m.mu.Lock()
+	m.pacChanged = fn
+	m.mu.Unlock()
+}
+
 // refreshPAC пересобирает правила по подключённым сейчас туннелям.
 func (m *Manager) refreshPAC() {
 	m.mu.Lock()
 	srv := m.pac
+	notify := m.pacChanged
 	rules := make([]pac.Tunnel, 0, len(m.tunnels))
 	for _, st := range m.tunnels {
 		if st.pacRule != nil {
@@ -117,6 +146,13 @@ func (m *Manager) refreshPAC() {
 	// между обновлениями и его можно было сравнивать глазами.
 	sort.Slice(rules, func(i, j int) bool { return rules[i].Name < rules[j].Name })
 	srv.SetTunnels(rules)
+
+	// Набор туннелей в скрипте изменился — сообщаем подписчику, чтобы он
+	// переприменил системный прокси: иначе система продолжит пользоваться
+	// прежней (кэшированной) версией скрипта.
+	if notify != nil {
+		notify()
+	}
 }
 
 // AddTunnel регистрирует туннель в менеджере (без запуска).

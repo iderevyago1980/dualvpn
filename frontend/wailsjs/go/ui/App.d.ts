@@ -38,3 +38,13 @@ export function SwitchMode(arg1:string):Promise<void>;
 export function PACURL():Promise<string>;
 
 export function PACScript():Promise<string>;
+
+export function ApplySystemProxy():Promise<void>;
+
+export function ClearSystemProxy():Promise<void>;
+
+export function SystemProxyApplied():Promise<boolean>;
+
+export function RestartAsAdmin():Promise<void>;
+
+export function NeedsAdminMessage():Promise<string>;

@@ -18,6 +18,9 @@ body {
 .btn { padding: 7px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; transition: all 0.15s; font-weight: 500; }
 .btn-ghost { background: transparent; color: #9ca3af; }
 .btn-ghost:hover { background: #1f2330; color: #e5e7eb; }
+/* Удаление — необратимое действие, поэтому кнопка выделена цветом. */
+.btn-danger { background: transparent; color: #f87171; }
+.btn-danger:hover { background: #7f1d1d; color: #fee2e2; }
 .btn-primary { background: #6366f1; color: white; }
 .btn-primary:hover { background: #4f46e5; }
 
@@ -25,6 +28,8 @@ body {
 .sidebar { background: #131620; border-right: 1px solid #25282f; padding: 12px; overflow-y: auto; }
 .sidebar-section { margin-bottom: 16px; }
 .sidebar-title { font-size: 10px; text-transform: uppercase; color: #6b7280; margin-bottom: 6px; padding: 0 8px; font-weight: 600; letter-spacing: 0.5px; }
+.sidebar-add { width: 100%; margin-top: 6px; font-size: 12px; border: 1px dashed #2b3040; }
+.sidebar-add:hover { border-color: #6366f1; color: #c7d2fe; }
 .tunnel-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; transition: all 0.15s; display: flex; flex-direction: column; gap: 2px; }
 .tunnel-item:hover { background: #1c2030; }
 .tunnel-item.active { background: #6366f120; border-left: 3px solid #6366f1; padding-left: 9px; }

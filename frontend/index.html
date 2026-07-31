@@ -23,6 +23,9 @@
     <div class="sidebar-section">
       <div class="sidebar-title">Туннели</div>
       <div id="tunnelList"></div>
+      <!-- Новый туннель создаётся пустым: адрес сервера заполняется в форме,
+           до сохранения он существует только в интерфейсе. -->
+      <button class="btn btn-ghost sidebar-add" onclick="addTunnel()">+ Добавить туннель</button>
     </div>
   </div>
 
@@ -38,12 +41,19 @@
       <div class="card-header">
         <span class="card-title">🔐 Параметры подключения</span>
         <div class="action-bar">
+          <button class="btn btn-danger" onclick="askDeleteTunnel()" title="Удалить этот туннель из конфигурации">🗑 Удалить</button>
           <button class="btn btn-ghost" onclick="saveConfig()">💾 Сохранить</button>
           <button class="btn-connect off" id="connectBtn" onclick="toggleTunnel()">▶ Подключить</button>
         </div>
       </div>
       <div class="card-body">
         <div class="form-grid">
+          <div class="form-field">
+            <!-- Имя — идентификатор туннеля: по нему идут статусы, журнал и
+                 пункты в трее, поэтому оно должно быть уникальным. -->
+            <label>Имя туннеля</label>
+            <input type="text" id="fName">
+          </div>
           <div class="form-field">
             <label>VPN сервер</label>
             <input type="text" id="fEndpoint">
@@ -143,6 +153,10 @@
       Автонастройка прокси:
       <span class="pac-url" id="pacUrl" onclick="copyPAC()" title="Нажмите, чтобы скопировать"></span>
     </span>
+    <!-- Направляет системный прокси Windows на PAC (режим SOCKS5): браузеры
+         начинают ходить в туннели без ручной настройки. -->
+    <button id="proxyBtn" class="btn btn-primary hidden" onclick="toggleProxy()"
+            style="padding:3px 12px;font-size:11px;" title="Направить трафик браузеров в туннели">Применить прокси</button>
     <span style="flex:1"></span>
     <span id="footerStatus">Загрузка…</span>
   </div>
@@ -159,6 +173,34 @@
     <div class="btn-row">
       <button class="btn btn-ghost" onclick="hideTwoFA()">Отмена</button>
       <button class="btn btn-primary" onclick="submitTwoFA()">Отправить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Подтверждение удаления туннеля: правка конфигурации необратима и
+     останавливает активные подключения. -->
+<div class="modal-overlay hidden" id="deleteOverlay">
+  <div class="modal">
+    <h2>Удалить туннель?</h2>
+    <p>Туннель «<span id="deleteName"></span>» будет удалён из конфигурации вместе с сохранёнными учётными данными.</p>
+    <p>Активные подключения при сохранении остановятся.</p>
+    <div class="btn-row">
+      <button class="btn btn-ghost" onclick="hideDeleteTunnel()">Отмена</button>
+      <button class="btn btn-danger" onclick="deleteTunnel()">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Запрос на перезапуск с правами администратора: режим TUN иначе недоступен,
+     а повысить права работающему процессу Windows не позволяет. -->
+<div class="modal-overlay hidden" id="elevateOverlay">
+  <div class="modal">
+    <h2>Нужны права администратора</h2>
+    <p>Режим TUN создаёт сетевой адаптер и маршруты — для этого нужны права администратора.</p>
+    <p>Перезапустить DualVPN с повышением прав? Windows попросит подтверждение, активные туннели будут отключены.</p>
+    <div class="btn-row">
+      <button class="btn btn-ghost" onclick="hideElevate()">Отмена</button>
+      <button class="btn btn-primary" onclick="restartAsAdmin()">Перезапустить</button>
     </div>
   </div>
 </div>

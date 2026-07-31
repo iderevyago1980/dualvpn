@@ -19,8 +19,8 @@ type Mode struct {
 
 // Tunnel — параметры одного VPN-туннеля (Cisco AnyConnect эндпоинт).
 type Tunnel struct {
-	Name      string   `toml:"name"`       // Отображаемое имя туннеля (например, "VPN-1")
-	Endpoint  string   `toml:"endpoint"`   // Адрес VPN-сервера (например, "vpn1.example.com")
+	Name      string   `toml:"name"`       // Отображаемое имя туннеля (например, "Офис")
+	Endpoint  string   `toml:"endpoint"`   // Адрес VPN-сервера (например, "vpn.example.com")
 	Group     string   `toml:"group"`      // Tunnel-group на Cisco ASA (например, "Group-2FA")
 	SocksPort int      `toml:"socks_port"` // Локальный порт SOCKS5-прокси в режиме socks5
 	TunName   string   `toml:"tun_name"`   // Имя TUN-интерфейса в режиме tun
@@ -156,10 +156,18 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("mode.preferred должен быть auto|tun|socks5, получено %q", c.Mode.Preferred)
 	}
 	seenPorts := map[int]string{}
+	seenNames := map[string]struct{}{}
 	for i, t := range c.Tunnels {
 		if t.Name == "" {
 			return fmt.Errorf("tunnels[%d]: пустое имя", i)
 		}
+		// Имя туннеля — его идентификатор: по нему менеджер хранит туннели
+		// в карте, а интерфейс — статусы. Одноимённые туннели затирали бы
+		// друг друга, и один из них молча исчезал бы из работы.
+		if _, dup := seenNames[t.Name]; dup {
+			return fmt.Errorf("несколько туннелей с именем %q — имена должны быть разными", t.Name)
+		}
+		seenNames[t.Name] = struct{}{}
 		if t.Endpoint == "" {
 			return fmt.Errorf("туннель %q: пустой endpoint", t.Name)
 		}

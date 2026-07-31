@@ -59,7 +59,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (st && st.connected) markConnected(t.Name, st.mode);
     }
 
-    if (tunnels.length) selectTunnel(tunnels[0].Name);
+    if (tunnels.length) selectTunnel(tunnels[0].Name); else showNoTunnels();
 
     const version = await App.Version();
     if (version) document.getElementById('appVersion').textContent = 'v' + version;
@@ -178,6 +178,7 @@ function selectTunnel(id) {
   document.getElementById('tunnelSubtitle').textContent =
     `${t.Endpoint} · AnyConnect (SSL/TLS) · Group: ${t.Group || '—'}`;
 
+  document.getElementById('fName').value = t.Name || '';
   document.getElementById('fEndpoint').value = t.Endpoint || '';
   document.getElementById('fGroup').value = t.Group || '';
   document.getElementById('fUser').value = t.Username || '';
@@ -185,6 +186,105 @@ function selectTunnel(id) {
   document.getElementById('fSocks').value = t.SocksPort || 1080;
   document.getElementById('fTun').value = t.TunName || '';
 
+  renderRoutes();
+  renderStats();
+  updateConnectBtn();
+}
+
+// ------------------------------------------------- добавление и удаление
+
+/**
+ * Кнопка «+ Добавить туннель»: создаёт запись с уникальным именем и
+ * свободным SOCKS-портом и открывает её в форме. В конфигурацию туннель
+ * попадает только после «Сохранить» — до этого он живёт в интерфейсе,
+ * поэтому незаполненный адрес сервера ничего не ломает.
+ */
+function addTunnel() {
+  const name = uniqueTunnelName();
+  tunnels.push({
+    Name: name,
+    Endpoint: '',
+    Group: '',
+    Username: '',
+    Password: '',
+    SocksPort: nextSocksPort(),
+    TunName: 'dualvpn' + tunnels.length,
+    Routes: [],
+  });
+  status[name] = { connected: false, connecting: false, mode: '', seconds: 0, timer: null };
+
+  renderSidebar();
+  selectTunnel(name);
+  setFooter('Новый туннель добавлен — укажите адрес сервера и нажмите «Сохранить»');
+  document.getElementById('fEndpoint').focus();
+}
+
+/** Имя вида «Туннель N», которого ещё нет в списке. */
+function uniqueTunnelName() {
+  const taken = new Set(tunnels.map(t => t.Name));
+  for (let i = tunnels.length + 1; ; i++) {
+    const name = 'Туннель ' + i;
+    if (!taken.has(name)) return name;
+  }
+}
+
+/** Свободный локальный порт SOCKS5: занятые порты бэкенд отвергает. */
+function nextSocksPort() {
+  const taken = new Set(tunnels.map(t => t.SocksPort));
+  let port = 1080;
+  while (taken.has(port)) port++;
+  return port;
+}
+
+/** Запрос подтверждения на удаление активного туннеля. */
+function askDeleteTunnel() {
+  if (!activeId) return;
+  document.getElementById('deleteName').textContent = activeId;
+  document.getElementById('deleteOverlay').classList.remove('hidden');
+}
+
+/** Закрытие запроса на удаление. */
+function hideDeleteTunnel() {
+  document.getElementById('deleteOverlay').classList.add('hidden');
+}
+
+/**
+ * Удаление туннеля: убираем из списка и сразу сохраняем конфигурацию —
+ * иначе удалённый туннель вернулся бы при следующем чтении конфига.
+ */
+async function deleteTunnel() {
+  hideDeleteTunnel();
+  const idx = tunnels.findIndex(t => t.Name === activeId);
+  if (idx < 0) return;
+
+  const removed = tunnels[idx].Name;
+  // Остановить таймер аптайма удаляемого туннеля, иначе он остался бы
+  // тикать по исчезнувшей записи.
+  const st = status[removed];
+  if (st && st.timer) clearInterval(st.timer);
+  delete status[removed];
+  tunnels.splice(idx, 1);
+
+  activeId = tunnels.length ? tunnels[Math.min(idx, tunnels.length - 1)].Name : null;
+  renderSidebar();
+  if (activeId) {
+    selectTunnel(activeId);
+  } else {
+    showNoTunnels();
+  }
+
+  if (await saveConfig()) setFooter('Туннель «' + removed + '» удалён');
+}
+
+/** Пустое состояние: в конфигурации не осталось ни одного туннеля. */
+function showNoTunnels() {
+  document.getElementById('tunnelTitle').textContent = 'Нет туннелей';
+  document.getElementById('tunnelSubtitle').textContent =
+    'Добавьте туннель кнопкой «+ Добавить туннель» слева';
+  for (const id of ['fName', 'fEndpoint', 'fGroup', 'fUser', 'fPass', 'fTun']) {
+    document.getElementById(id).value = '';
+  }
+  document.getElementById('fSocks').value = '';
   renderRoutes();
   renderStats();
   updateConnectBtn();
@@ -249,16 +349,63 @@ async function disconnectAll() {
   }
 }
 
-/** Кнопка «Сменить режим»: tun ↔ socks5 (бэкенд останавливает туннели). */
+/**
+ * Кнопка «Сменить режим»: tun ↔ socks5 (бэкенд останавливает туннели).
+ *
+ * Режим TUN требует прав администратора. Обычный (per-user) запуск их не
+ * имеет, поэтому вместо молчаливого отказа предлагаем перезапуск с
+ * повышением прав — иначе кнопка выглядела бы неисправной: отказ уходил
+ * только в журнал, а в интерфейсе не менялось ничего.
+ */
 async function switchMode() {
   if (!App) return;
   const target = currentMode === 'tun' ? 'socks5' : 'tun';
+  if (target === 'tun' && !(await App.IsAdmin())) {
+    showElevate();
+    return;
+  }
   try {
     await App.SwitchMode(target);
     tunnels.forEach(t => markDisconnected(t.Name));
     await refreshModePill();
     await refreshPAC(); // PAC живёт только в режиме SOCKS5
+    setFooter('Режим переключён: ' + target.toUpperCase());
   } catch (e) {
+    const msg = String(e);
+    // Права могли пропасть между проверкой и вызовом (или режим задан
+    // в конфиге) — предлагаем перезапуск и в этом случае.
+    if (msg.includes(await App.NeedsAdminMessage())) {
+      showElevate();
+      return;
+    }
+    setFooter('Не удалось сменить режим: ' + msg);
+    logLocal('err', msg);
+  }
+}
+
+/** Показать запрос на перезапуск с правами администратора. */
+function showElevate() {
+  document.getElementById('elevateOverlay').classList.remove('hidden');
+}
+
+/** Закрыть запрос на перезапуск. */
+function hideElevate() {
+  document.getElementById('elevateOverlay').classList.add('hidden');
+  setFooter('Режим TUN недоступен без прав администратора');
+}
+
+/**
+ * Перезапуск с повышением прав: бэкенд запускает новый экземпляр (UAC) и
+ * закрывает текущий. Отказ в диалоге UAC возвращается ошибкой — окно
+ * закрываем, приложение продолжает работать в SOCKS5.
+ */
+async function restartAsAdmin() {
+  document.getElementById('elevateOverlay').classList.add('hidden');
+  try {
+    await App.RestartAsAdmin();
+    setFooter('Перезапуск с правами администратора…');
+  } catch (e) {
+    setFooter('Перезапуск не выполнен: ' + e);
     logLocal('err', String(e));
   }
 }
@@ -284,6 +431,21 @@ async function refreshModePill() {
 function collectForm() {
   const t = tunnels.find(x => x.Name === activeId);
   if (!t) return;
+
+  // Имя туннеля — его идентификатор: под ним живут статусы, элементы
+  // сайдбара и регистрация в бэкенде. При переименовании состояние нужно
+  // перенести на новое имя, иначе туннель «потеряется» в интерфейсе.
+  const newName = document.getElementById('fName').value.trim();
+  if (newName && newName !== t.Name) {
+    status[newName] = status[t.Name] || { connected: false, connecting: false, mode: '', seconds: 0, timer: null };
+    delete status[t.Name];
+    t.Name = newName;
+    activeId = newName;
+    renderSidebar();
+    document.getElementById('tunnelTitle').textContent = newName;
+    setDot(newName, status[newName].connected ? 'on' : 'off');
+  }
+
   t.Endpoint = document.getElementById('fEndpoint').value.trim();
   t.Group = document.getElementById('fGroup').value.trim();
   t.Username = document.getElementById('fUser').value.trim();
@@ -310,6 +472,52 @@ async function refreshPAC() {
   document.getElementById('pacUrl').textContent = url || '';
   line.classList.toggle('hidden', !url);
   block.classList.toggle('hidden', !url);
+  await updateProxyBtn(!!url);
+}
+
+/**
+ * Обновляет кнопку «Применить/Снять прокси». Кнопка видна только когда есть
+ * PAC (режим SOCKS5); подпись отражает, направлен ли уже системный прокси в
+ * туннели.
+ */
+async function updateProxyBtn(hasPAC) {
+  const btn = document.getElementById('proxyBtn');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !hasPAC);
+  if (!hasPAC || !App) return;
+  let applied = false;
+  try {
+    applied = await App.SystemProxyApplied();
+  } catch (e) {
+    logLocal('err', String(e));
+  }
+  btn.textContent = applied ? 'Снять прокси' : 'Применить прокси';
+  btn.classList.toggle('btn-primary', !applied);
+  btn.classList.toggle('btn-ghost', applied);
+}
+
+/**
+ * Кнопка «Применить/Снять прокси»: направляет системный прокси Windows на
+ * раздаваемый PAC (или убирает его). В отличие от копирования адреса вручную,
+ * браузеры сразу начинают ходить в туннели по домену.
+ */
+async function toggleProxy() {
+  if (!App) return;
+  let applied = false;
+  try {
+    applied = await App.SystemProxyApplied();
+    if (applied) {
+      await App.ClearSystemProxy();
+      setFooter('Системный прокси снят — прямое соединение');
+    } else {
+      await App.ApplySystemProxy();
+      setFooter('Трафик браузеров направлен в туннели');
+    }
+  } catch (e) {
+    setFooter('Не удалось изменить системный прокси: ' + e);
+    logLocal('err', String(e));
+  }
+  await updateProxyBtn(true);
 }
 
 /** Копирование адреса PAC в буфер обмена. */

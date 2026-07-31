@@ -73,3 +73,23 @@ export function PACURL() {
 export function PACScript() {
   return window['go']['ui']['App']['PACScript']();
 }
+
+export function ApplySystemProxy() {
+  return window['go']['ui']['App']['ApplySystemProxy']();
+}
+
+export function ClearSystemProxy() {
+  return window['go']['ui']['App']['ClearSystemProxy']();
+}
+
+export function SystemProxyApplied() {
+  return window['go']['ui']['App']['SystemProxyApplied']();
+}
+
+export function RestartAsAdmin() {
+  return window['go']['ui']['App']['RestartAsAdmin']();
+}
+
+export function NeedsAdminMessage() {
+  return window['go']['ui']['App']['NeedsAdminMessage']();
+}

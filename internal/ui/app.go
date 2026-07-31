@@ -17,9 +17,11 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"dualvpn/internal/config"
+	"dualvpn/internal/elevate"
 	"dualvpn/internal/mode"
 	"dualvpn/internal/vpn"
 	"dualvpn/internal/vpn/sslcon"
+	"dualvpn/internal/winproxy"
 )
 
 // LogEntry — одна запись журнала приложения; отдаётся фронтенду как есть.
@@ -54,12 +56,17 @@ type App struct {
 	manager *vpn.Manager
 	cfgPath string
 
-	mu       sync.Mutex
-	cfg      *config.Config
-	mode     string // итоговый режим работы: "tun" | "socks5"
-	logBuf   []LogEntry
-	tray     *Tray
-	quitting bool // true после команды «Выход» — разрешает закрытие окна
+	mu           sync.Mutex
+	cfg          *config.Config
+	mode         string // итоговый режим работы: "tun" | "socks5"
+	logBuf       []LogEntry
+	tray         *Tray
+	quitting     bool // true после команды «Выход» — разрешает закрытие окна
+	proxyApplied bool // true, если системный прокси Windows направлен в туннели
+	// proxyNonce увеличивается при каждом применении прокси и попадает в
+	// адрес PAC. Без этого система, единожды прочитав скрипт по данному
+	// адресу, продолжала бы пользоваться его прежней версией.
+	proxyNonce uint64
 }
 
 // NewApp загружает конфигурацию (создавая файл по умолчанию при отсутствии),
@@ -80,6 +87,10 @@ func NewApp(cfgPath string, starterConfig []byte) (*App, error) {
 		mode:    resolveMode(cfg.Mode.Preferred),
 	}
 	a.registerTunnels()
+	// Набор туннелей в PAC меняется при каждом подключении и отключении —
+	// системный прокси нужно переприменять, иначе он останется на прежней
+	// версии скрипта (см. onPACChanged).
+	a.manager.SetPACChanged(a.onPACChanged)
 	return a, nil
 }
 
@@ -100,12 +111,21 @@ func (a *App) Startup(ctx context.Context) {
 		a.GetMode(), len(a.GetTunnels()), mode.IsAdmin()))
 }
 
-// Shutdown вызывается Wails при выходе: останавливает трей и все туннели.
+// Shutdown вызывается Wails при выходе: снимает системный прокси (если он был
+// применён — иначе браузеры остались бы направлены на уже закрытый PAC),
+// останавливает трей и все туннели.
 func (a *App) Shutdown(_ context.Context) {
 	a.mu.Lock()
 	tray := a.tray
+	applied := a.proxyApplied
+	a.proxyApplied = false
 	a.mu.Unlock()
 
+	if applied {
+		if err := winproxy.Clear(); err != nil {
+			a.log("warn", "не удалось снять системный прокси при выходе: "+err.Error())
+		}
+	}
 	if tray != nil {
 		tray.Stop()
 	}
@@ -185,7 +205,7 @@ func (a *App) SwitchMode(m string) error {
 		return fmt.Errorf("неизвестный режим %q (ожидается auto|tun|socks5)", m)
 	}
 	if m == mode.TUN && !mode.IsAdmin() {
-		return fmt.Errorf("режим tun требует прав администратора — перезапустите с sudo или используйте socks5")
+		return errNeedsAdmin
 	}
 
 	a.mu.Lock()
@@ -193,8 +213,65 @@ func (a *App) SwitchMode(m string) error {
 	a.mu.Unlock()
 
 	a.registerTunnels() // остановит активные туннели и перерегистрирует с новым режимом
+	a.syncPAC(m)
 	a.log("info", "режим переключён: "+m)
 	return nil
+}
+
+// errNeedsAdmin — режим TUN запрошен без прав администратора. Фронтенд по
+// этому признаку предлагает перезапуск с повышением прав (RestartAsAdmin).
+var errNeedsAdmin = errors.New("режим tun требует прав администратора — перезапустите приложение от администратора")
+
+// NeedsAdminMessage возвращает текст отказа при попытке включить TUN без
+// прав администратора. Фронтенд сравнивает с ним текст ошибки, чтобы
+// отличить этот случай от прочих сбоев и предложить перезапуск.
+func (a *App) NeedsAdminMessage() string { return errNeedsAdmin.Error() }
+
+// RestartAsAdmin перезапускает приложение с правами администратора (UAC) и
+// закрывает текущий экземпляр. Единственный способ попасть в режим TUN из
+// обычного запуска: повысить права работающему процессу Windows не даёт.
+func (a *App) RestartAsAdmin() error {
+	if mode.IsAdmin() {
+		return errors.New("приложение уже запущено от администратора")
+	}
+	if err := elevate.Relaunch(); err != nil {
+		a.log("err", err.Error())
+		return err
+	}
+	a.log("info", "перезапуск с правами администратора")
+	// Выход даём выполнить после возврата ответа во фронтенд: иначе окно
+	// закроется раньше, чем вызов завершится.
+	go a.Quit()
+	return nil
+}
+
+// syncPAC приводит раздачу PAC и системный прокси в соответствие режиму.
+// В SOCKS5 без PAC браузеру некуда смотреть; в TUN он не нужен, а
+// оставленная настройка прокси указывала бы на исчезнувшую раздачу — и
+// браузер потерял бы сеть вовсе.
+func (a *App) syncPAC(m string) {
+	if m == mode.SOCKS5 {
+		if a.manager.PACURL() == "" {
+			a.startPAC()
+		}
+		return
+	}
+
+	a.mu.Lock()
+	applied := a.proxyApplied
+	a.proxyApplied = false
+	a.mu.Unlock()
+
+	if applied {
+		if err := winproxy.Clear(); err != nil {
+			a.log("warn", "не удалось снять системный прокси: "+err.Error())
+		} else {
+			a.log("ok", "системный прокси снят: в режиме TUN он не нужен")
+		}
+	}
+	if err := a.manager.DisablePAC(); err != nil {
+		a.log("warn", "не удалось остановить раздачу PAC: "+err.Error())
+	}
 }
 
 // ConnectTunnel запускает один туннель по идентификатору (имени).
@@ -325,6 +402,85 @@ func (a *App) PACURL() string { return a.manager.PACURL() }
 
 // PACScript возвращает текущий текст PAC-скрипта (диагностика в UI).
 func (a *App) PACScript() string { return a.manager.PACScript() }
+
+// ApplySystemProxy направляет системный прокси Windows на раздаваемый PAC,
+// чтобы браузеры сами выбирали туннель по домену без ручной настройки.
+// Имеет смысл только в режиме SOCKS5 (в TUN трафик идёт по маршрутам).
+// Настройка per-user (HKCU) — прав администратора не требует.
+func (a *App) ApplySystemProxy() error {
+	url, err := a.applyProxy()
+	if err != nil {
+		a.log("err", err.Error())
+		return err
+	}
+	a.mu.Lock()
+	a.proxyApplied = true
+	a.mu.Unlock()
+	a.log("ok", "системный прокси направлен в туннели: "+url)
+	return nil
+}
+
+// applyProxy записывает текущий адрес PAC в системные настройки прокси и
+// возвращает базовый (без служебного параметра) адрес для журнала.
+//
+// К адресу добавляется возрастающий параметр: WinINET кэширует скрипт по
+// адресу и не перечитывает его при изменении содержимого. Из-за этого
+// туннель, подключённый после применения прокси, оставался вне PAC — трафик
+// шёл только в тот туннель, который был поднят на момент нажатия кнопки.
+func (a *App) applyProxy() (string, error) {
+	url := a.manager.PACURL()
+	if url == "" {
+		return "", errors.New("автонастройка прокси недоступна: PAC не запущен (режим не SOCKS5?)")
+	}
+	a.mu.Lock()
+	a.proxyNonce++
+	nonce := a.proxyNonce
+	a.mu.Unlock()
+
+	if err := winproxy.Apply(fmt.Sprintf("%s?v=%d", url, nonce)); err != nil {
+		return "", err
+	}
+	return url, nil
+}
+
+// onPACChanged переприменяет системный прокси после изменения набора
+// туннелей в PAC (подключение или отключение). Пока прокси не применён,
+// делать нечего: настройка системы не тронута.
+func (a *App) onPACChanged() {
+	a.mu.Lock()
+	applied := a.proxyApplied
+	a.mu.Unlock()
+	if !applied {
+		return
+	}
+	if _, err := a.applyProxy(); err != nil {
+		a.log("warn", "не удалось обновить системный прокси: "+err.Error())
+		return
+	}
+	a.log("info", "системный прокси обновлён под текущий набор туннелей")
+}
+
+// ClearSystemProxy убирает системный прокси Windows (возврат к прямому
+// соединению).
+func (a *App) ClearSystemProxy() error {
+	if err := winproxy.Clear(); err != nil {
+		a.log("err", err.Error())
+		return err
+	}
+	a.mu.Lock()
+	a.proxyApplied = false
+	a.mu.Unlock()
+	a.log("ok", "системный прокси снят — прямое соединение")
+	return nil
+}
+
+// SystemProxyApplied сообщает, направлен ли сейчас системный прокси в туннели
+// (для отображения состояния кнопки во фронтенде).
+func (a *App) SystemProxyApplied() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.proxyApplied
+}
 
 // FetchGroups запрашивает у сервера список групп (алиасов tunnel-group).
 // Имя группы должно совпадать с одним из них буквально, поэтому список

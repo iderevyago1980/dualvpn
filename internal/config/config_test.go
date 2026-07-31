@@ -127,6 +127,9 @@ func TestValidateErrors(t *testing.T) {
 		{"нулевой порт", func(c *Config) { c.Tunnels[0].SocksPort = 0 }, "socks_port"},
 		{"порт вне диапазона", func(c *Config) { c.Tunnels[0].SocksPort = 70000 }, "socks_port"},
 		{"дубликат порта", func(c *Config) { c.Tunnels[1].SocksPort = c.Tunnels[0].SocksPort }, "один socks_port"},
+		// Имя — идентификатор туннеля: одноимённые затирали бы друг друга
+		// в менеджере, и один из них молча исчезал бы из работы.
+		{"дубликат имени", func(c *Config) { c.Tunnels[1].Name = c.Tunnels[0].Name }, "именем"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
