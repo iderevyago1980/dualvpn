@@ -83,6 +83,14 @@ func NewProfile(host, username, password, group, secret string) *Profile {
 	return p
 }
 
+// SetHost переводит профиль на другой адрес шлюза. Нужен при следовании
+// HTTP-редиректу: дальнейшие шаги (аутентификация, CSTP-туннель) должны
+// идти уже на новый адрес, а не на исходный.
+func (p *Profile) SetHost(host string) {
+	p.Host = host
+	p.HostWithPort = hostWithPort(host)
+}
+
 // hostWithPort добавляет стандартный порт 443, если порт не указан явно.
 func hostWithPort(host string) string {
 	if strings.Contains(host, ":") {

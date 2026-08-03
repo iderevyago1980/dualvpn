@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -170,13 +171,49 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 }
 
-// InitAuth устанавливает TLS-соединение, определяет группу пользователя и
-// адрес аутентификации AuthPath. Аналог auth.InitAuth, но на состоянии Client.
-func (c *Client) InitAuth() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// maxRedirects ограничивает цепочку перенаправлений: несколько шагов
+// допустимы (имя → балансировщик → узел), бесконечный цикл — нет.
+const maxRedirects = 5
 
-	c.WebVpnCookie = ""
+// initWithRedirects выполняет init-запрос, следуя перенаправлениям шлюза.
+// При каждом переходе адрес профиля обновляется, поэтому аутентификация и
+// CSTP-туннель дальше идут уже на конечный сервер.
+func (c *Client) initWithRedirects(dtd *proto.DTD) error {
+	for attempt := 0; ; attempt++ {
+		if err := c.dial(); err != nil {
+			return err
+		}
+
+		err := c.tplPost(tplInit, "", dtd)
+		if err == nil {
+			return nil
+		}
+
+		var redirect *redirectError
+		if !errors.As(err, &redirect) {
+			return err
+		}
+		if attempt >= maxRedirects {
+			return fmt.Errorf("слишком много перенаправлений (%d), последнее — на %s",
+				maxRedirects, redirect.Location)
+		}
+
+		host, hostErr := redirectHost(redirect.Location)
+		if hostErr != nil {
+			return hostErr
+		}
+		if host == c.Prof.HostWithPort || host == c.Prof.Host {
+			return fmt.Errorf("сервер перенаправляет сам на себя (%s)", redirect.Location)
+		}
+
+		base.Info("сервер перенаправил " + c.Prof.Host + " на " + host)
+		c.emit(EventProgress, fmt.Sprintf("сервер перенаправил на %s", host))
+		c.Prof.SetHost(host)
+	}
+}
+
+// dial устанавливает TLS-соединение с текущим адресом профиля.
+func (c *Client) dial() error {
 	config := tls.Config{
 		InsecureSkipVerify: c.insecureSkipVerify,
 	}
@@ -186,14 +223,24 @@ func (c *Client) InitAuth() error {
 	}
 	c.Conn = conn
 	c.BufR = bufio.NewReader(conn)
+	return nil
+}
 
-	dtd := new(proto.DTD)
+// InitAuth устанавливает TLS-соединение, определяет группу пользователя и
+// адрес аутентификации AuthPath. Аналог auth.InitAuth, но на состоянии Client.
+//
+// Перенаправления шлюза отслеживаются: адрес, на который сервер отвечает
+// редиректом, заменяется на целевой (см. initWithRedirects).
+func (c *Client) InitAuth() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	c.WebVpnCookie = ""
 	c.Prof.AppVersion = base.Cfg.AgentVersion
 	c.Prof.MacAddress = base.LocalInterface.Mac
 
-	err = c.tplPost(tplInit, "", dtd)
-	if err != nil {
+	dtd := new(proto.DTD)
+	if err := c.initWithRedirects(dtd); err != nil {
 		return err
 	}
 	c.Prof.AuthPath = dtd.Auth.Form.Action
@@ -604,8 +651,63 @@ func (c *Client) tplPost(typ int, path string, dtd *proto.DTD) error {
 		// nil при успешном разборе
 		return err
 	}
+	// Перенаправление: шлюз может отвечать с одного имени, а обслуживать
+	// подключения на другом (например, vpn.example.com → vpn2.example.com).
+	// Настоящий AnyConnect редирект отслеживает; без этого пользователь
+	// получал невнятное «auth error 302 Temporary moved» и не понимал,
+	// какой адрес указывать.
+	if loc := redirectTarget(resp); loc != "" {
+		c.Conn.Close()
+		return &redirectError{Location: loc, Status: resp.Status}
+	}
+
 	c.Conn.Close()
 	return fmt.Errorf("auth error %s", resp.Status)
+}
+
+// redirectError — сервер ответил перенаправлением на другой адрес.
+type redirectError struct {
+	Location string // значение заголовка Location
+	Status   string // исходный статус ответа (для сообщения об ошибке)
+}
+
+func (e *redirectError) Error() string {
+	return fmt.Sprintf("перенаправление (%s) на %s", e.Status, e.Location)
+}
+
+// redirectTarget возвращает адрес перенаправления ("" — ответ не является
+// перенаправлением либо в нём нет Location).
+func redirectTarget(resp *http.Response) string {
+	switch resp.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+	default:
+		return ""
+	}
+	return resp.Header.Get("Location")
+}
+
+// redirectHost разбирает Location и возвращает хост (с портом), на который
+// нужно переключиться. Ошибка означает, что следовать перенаправлению
+// нельзя, и её текст объясняет пользователю причину.
+//
+// Схема ограничена https: понижение до http означало бы отправку учётных
+// данных открытым текстом, а на такое перенаправление идти нельзя.
+func redirectHost(location string) (string, error) {
+	u, err := url.Parse(location)
+	if err != nil {
+		return "", fmt.Errorf("некорректный адрес перенаправления %q: %w", location, err)
+	}
+	if u.Host == "" {
+		// Перенаправление на другой путь того же сервера: адрес шлюза
+		// остаётся прежним, менять нечего, а путь aggregate-auth задан
+		// протоколом. Обычно это признак портала вместо VPN-эндпоинта.
+		return "", fmt.Errorf("сервер перенаправляет на %q — похоже, это веб-портал, а не адрес VPN-шлюза", location)
+	}
+	if u.Scheme != "" && u.Scheme != "https" {
+		return "", fmt.Errorf("перенаправление на %q: поддерживается только https", location)
+	}
+	return u.Host, nil
 }
 
 // Events возвращает канал событий туннеля. Канал создаётся в NewClient,
