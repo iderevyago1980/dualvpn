@@ -541,6 +541,14 @@ func (c *Client) Close() error {
 	err := c.Conn.Close()
 	c.Conn = nil
 	c.BufR = nil
+
+	// Соединение могло закрыться раньше — например, туннель завершил сам
+	// сервер. Отключение обязано быть идемпотентным: иначе пользователь,
+	// нажавший «Отключить» у уже упавшего туннеля, получает ошибку
+	// «use of closed network connection» вместо спокойного отключения.
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
 	return err
 }
 
