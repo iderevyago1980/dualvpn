@@ -18,6 +18,7 @@ import (
 
 	"dualvpn/internal/config"
 	"dualvpn/internal/elevate"
+	"dualvpn/internal/ipc"
 	"dualvpn/internal/mode"
 	"dualvpn/internal/vpn"
 	"dualvpn/internal/vpn/sslcon"
@@ -67,6 +68,12 @@ type App struct {
 	// адрес PAC. Без этого система, единожды прочитав скрипт по данному
 	// адресу, продолжала бы пользоваться его прежней версией.
 	proxyNonce uint64
+
+	// Служба DualVPN держит TUN-туннели с правами системы, поэтому режим TUN
+	// доступен обычному пользователю (см. internal/ipc). svc — соединение с
+	// ней, svcAvailable — установлена ли она вообще.
+	svc          *ipc.Client
+	svcAvailable bool
 }
 
 // NewApp загружает конфигурацию (создавая файл по умолчанию при отсутствии),
@@ -84,8 +91,11 @@ func NewApp(cfgPath string, starterConfig []byte) (*App, error) {
 		manager: vpn.NewManager(),
 		cfgPath: cfgPath,
 		cfg:     cfg,
-		mode:    resolveMode(cfg.Mode.Preferred),
 	}
+	// Режим определяется с учётом службы: она держит TUN-туннели за нас,
+	// поэтому TUN доступен и без прав администратора.
+	a.svcAvailable = ipc.Available()
+	a.mode = a.resolveMode(cfg.Mode.Preferred)
 	a.registerTunnels()
 	// Набор туннелей в PAC меняется при каждом подключении и отключении —
 	// системный прокси нужно переприменять, иначе он останется на прежней
@@ -199,12 +209,14 @@ func (a *App) DetectMode() string {
 func (a *App) SwitchMode(m string) error {
 	switch m {
 	case "auto":
-		m = mode.Detect()
+		m = a.resolveMode("auto")
 	case mode.TUN, mode.SOCKS5:
 	default:
 		return fmt.Errorf("неизвестный режим %q (ожидается auto|tun|socks5)", m)
 	}
-	if m == mode.TUN && !mode.IsAdmin() {
+	// Служба держит TUN-туннели с правами системы, поэтому при её наличии
+	// администратор приложению не нужен.
+	if m == mode.TUN && !mode.IsAdmin() && !a.refreshServiceAvailability() {
 		return errNeedsAdmin
 	}
 
@@ -275,8 +287,10 @@ func (a *App) syncPAC(m string) {
 }
 
 // ConnectTunnel запускает один туннель по идентификатору (имени).
+// Исполнитель зависит от режима: в TUN при установленной службе туннель
+// поднимает она, поэтому права администратора приложению не нужны.
 func (a *App) ConnectTunnel(id string) error {
-	if err := a.manager.Start(a.context(), id); err != nil {
+	if err := a.backend().Connect(id); err != nil {
 		a.log("err", err.Error())
 		return err
 	}
@@ -286,7 +300,7 @@ func (a *App) ConnectTunnel(id string) error {
 
 // DisconnectTunnel останавливает один туннель по идентификатору.
 func (a *App) DisconnectTunnel(id string) error {
-	if err := a.manager.Stop(id); err != nil {
+	if err := a.backend().Disconnect(id); err != nil {
 		a.log("err", err.Error())
 		return err
 	}
@@ -294,22 +308,27 @@ func (a *App) DisconnectTunnel(id string) error {
 	return nil
 }
 
-// ConnectAll запускает все зарегистрированные туннели.
+// ConnectAll запускает все туннели из конфигурации.
 // Ошибки отдельных туннелей приходят событиями "tunnel:event" (type=error).
 func (a *App) ConnectAll() {
 	a.log("info", "запуск всех туннелей")
-	a.manager.StartAll(a.context())
+	backend := a.backend()
+	for _, t := range a.GetTunnels() {
+		if err := backend.Connect(t.Name); err != nil {
+			a.log("err", err.Error())
+		}
+	}
 }
 
 // DisconnectAll останавливает все запущенные туннели.
 func (a *App) DisconnectAll() {
 	a.log("info", "остановка всех туннелей")
-	a.manager.StopAll()
+	a.backend().DisconnectAll()
 }
 
 // Submit2FA передаёт 2FA-код (TOTP) туннелю, запросившему второй фактор.
 func (a *App) Submit2FA(tunnelID, code string) error {
-	if err := a.manager.Submit2FA(tunnelID, code); err != nil {
+	if err := a.backend().Submit2FA(tunnelID, code); err != nil {
 		a.log("err", err.Error())
 		return err
 	}
@@ -319,7 +338,7 @@ func (a *App) Submit2FA(tunnelID, code string) error {
 
 // GetTunnelStatus возвращает статус туннеля: подключён ли и режим работы.
 func (a *App) GetTunnelStatus(id string) TunnelStatus {
-	connected, m := a.manager.Status(id)
+	connected, m := a.backend().Status(id)
 	return TunnelStatus{Connected: connected, Mode: m}
 }
 
@@ -542,34 +561,41 @@ func (a *App) registerTunnels() {
 // во фронтенд: "tunnel:event" — всегда, "tunnel:2fa" — при запросе кода.
 func (a *App) forwardEvents() {
 	for ev := range a.manager.Events() {
-		level := "info"
-		switch ev.Event.Type {
-		case sslcon.EventConnected:
-			level = "ok"
-		case sslcon.EventDisconnected, sslcon.Event2FARequired:
-			level = "warn"
-		case sslcon.EventError:
-			level = "err"
-		}
-		a.log(level, fmt.Sprintf("[%s] %s: %s", ev.TunnelID, ev.Event.Type, ev.Event.Message))
+		a.handleEvent(ev.TunnelID, ev.Event.Type, ev.Event.Message)
+	}
+}
 
-		// Отражаем смену состояния туннеля в меню трея.
-		switch ev.Event.Type {
-		case sslcon.EventConnected:
-			a.trayStatus(ev.TunnelID, true)
-		case sslcon.EventDisconnected, sslcon.EventError:
-			a.trayStatus(ev.TunnelID, false)
-		}
+// handleEvent обрабатывает событие туннеля независимо от того, кто его
+// прислал: локальный менеджер или служба DualVPN. Пишет в журнал, обновляет
+// трей и транслирует событие во фронтенд.
+func (a *App) handleEvent(tunnelID string, typ sslcon.EventType, message string) {
+	level := "info"
+	switch typ {
+	case sslcon.EventConnected:
+		level = "ok"
+	case sslcon.EventDisconnected, sslcon.Event2FARequired:
+		level = "warn"
+	case sslcon.EventError:
+		level = "err"
+	}
+	a.log(level, fmt.Sprintf("[%s] %s: %s", tunnelID, typ, message))
 
-		if ctx := a.context(); ctx != nil {
-			runtime.EventsEmit(ctx, "tunnel:event", EventPayload{
-				TunnelID: ev.TunnelID,
-				Type:     string(ev.Event.Type),
-				Message:  ev.Event.Message,
-			})
-			if ev.Event.Type == sslcon.Event2FARequired {
-				runtime.EventsEmit(ctx, "tunnel:2fa", ev.TunnelID)
-			}
+	// Отражаем смену состояния туннеля в меню трея.
+	switch typ {
+	case sslcon.EventConnected:
+		a.trayStatus(tunnelID, true)
+	case sslcon.EventDisconnected, sslcon.EventError:
+		a.trayStatus(tunnelID, false)
+	}
+
+	if ctx := a.context(); ctx != nil {
+		runtime.EventsEmit(ctx, "tunnel:event", EventPayload{
+			TunnelID: tunnelID,
+			Type:     string(typ),
+			Message:  message,
+		})
+		if typ == sslcon.Event2FARequired {
+			runtime.EventsEmit(ctx, "tunnel:2fa", tunnelID)
 		}
 	}
 }
@@ -612,10 +638,17 @@ func loadOrCreate(path string, starter []byte) (*config.Config, error) {
 }
 
 // resolveMode разрешает значение из конфига: "auto" (или пустое) —
-// автодетекцией админ-прав, иначе используется как есть.
-func resolveMode(preferred string) string {
-	if preferred == "auto" || preferred == "" {
-		return mode.Detect()
+// автоматически, иначе используется как есть.
+//
+// В автоматическом режиме TUN выбирается, если права есть у самого
+// приложения (запуск от администратора) либо если установлена служба —
+// тогда туннели поднимает она.
+func (a *App) resolveMode(preferred string) string {
+	if preferred != "auto" && preferred != "" {
+		return preferred
 	}
-	return preferred
+	if mode.IsAdmin() || a.ServiceAvailable() {
+		return mode.TUN
+	}
+	return mode.SOCKS5
 }

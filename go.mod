@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/elastic/go-sysinfo v1.13.1
 	github.com/getlantern/systray v1.2.2
@@ -23,7 +24,6 @@ require (
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/transport/v3 v3.0.1 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
-	golang.org/x/image v0.44.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 )

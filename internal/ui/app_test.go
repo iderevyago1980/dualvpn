@@ -47,18 +47,43 @@ func newTestApp(t *testing.T) *App {
 // --- resolveMode: чистая логика разрешения режима из конфига ---
 
 func TestResolveMode(t *testing.T) {
-	if got := resolveMode("tun"); got != "tun" {
+	app := newTestApp(t)
+
+	if got := app.resolveMode("tun"); got != "tun" {
 		t.Errorf("resolveMode(\"tun\") = %q, ожидалось \"tun\"", got)
 	}
-	if got := resolveMode("socks5"); got != "socks5" {
+	if got := app.resolveMode("socks5"); got != "socks5" {
 		t.Errorf("resolveMode(\"socks5\") = %q, ожидалось \"socks5\"", got)
 	}
-	// "auto" и пустая строка → автодетекция.
-	if got := resolveMode("auto"); got != mode.Detect() {
-		t.Errorf("resolveMode(\"auto\") = %q, ожидалось %q", got, mode.Detect())
+
+	// "auto" и пустая строка разрешаются одинаково.
+	if got, empty := app.resolveMode("auto"), app.resolveMode(""); got != empty {
+		t.Errorf("resolveMode(\"auto\") = %q, resolveMode(\"\") = %q — должны совпадать", got, empty)
 	}
-	if got := resolveMode(""); got != mode.Detect() {
-		t.Errorf("resolveMode(\"\") = %q, ожидалось %q", got, mode.Detect())
+}
+
+// TestResolveModeAutoPrefersTUNWithService — TUN доступен и без прав
+// администратора, когда установлена служба: она держит туннели за нас.
+// Именно ради этого ставится машинная версия приложения.
+func TestResolveModeAutoPrefersTUNWithService(t *testing.T) {
+	app := newTestApp(t)
+
+	app.mu.Lock()
+	app.svcAvailable = true
+	app.mu.Unlock()
+	if got := app.resolveMode("auto"); got != mode.TUN {
+		t.Errorf("со службой resolveMode(\"auto\") = %q, ожидался %q", got, mode.TUN)
+	}
+
+	app.mu.Lock()
+	app.svcAvailable = false
+	app.mu.Unlock()
+	want := mode.SOCKS5
+	if mode.IsAdmin() {
+		want = mode.TUN // от администратора TUN доступен и без службы
+	}
+	if got := app.resolveMode("auto"); got != want {
+		t.Errorf("без службы resolveMode(\"auto\") = %q, ожидался %q", got, want)
 	}
 }
 

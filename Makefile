@@ -55,6 +55,21 @@ wintun: ## Скачать Wintun (wintun.dll) из релиза — бинарь
 installer: build-windows wintun
 	$(MAKENSIS) -DAPPVERSION=$(VERSION) -DSRCROOT=$(CURDIR) build/windows/installer.nsi
 
+# Служба Windows: держит TUN-туннели под LocalSystem, чтобы обычный
+# пользователь поднимал VPN без прав администратора (см. internal/ipc).
+build-service:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build \
+		-ldflags "-s -w -X main.version=$(VERSION)" -o $(BINDIR)/dualvpn-service.exe ./cmd/dualvpn-service
+
+# Установщик для всех пользователей: Program Files + регистрация службы.
+# Права администратора нужны только на этом шаге; дальше TUN работает без них.
+# Результат: bin/DualVPN-Setup-$(VERSION)-machine.exe
+installer-machine: build-windows build-service wintun
+	$(MAKENSIS) -DAPPVERSION=$(VERSION) -DSRCROOT=$(CURDIR) build/windows/installer-machine.nsi
+
+# Оба установщика: per-user (без админа, только SOCKS5) и машинный со службой.
+installers: installer installer-machine
+
 # .deb-пакет для Debian/Ubuntu. Ключевое: секция Depends объявляет
 # runtime-библиотеки (webkit2gtk-4.1, gtk3, ayatana-appindicator) — без них
 # на чистой системе бинарник молча не стартует ("cannot open shared object
