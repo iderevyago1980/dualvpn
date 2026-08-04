@@ -8,7 +8,7 @@ GO       ?= go
 WAILS    ?= wails
 MAKENSIS ?= makensis
 BINDIR   := bin
-VERSION  ?= 1.10.1
+VERSION  ?= 1.11.0
 
 LINUX_TAGS   := desktop,production,webkit2_41
 WINDOWS_TAGS := desktop,production
