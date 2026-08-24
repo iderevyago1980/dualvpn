@@ -13,10 +13,11 @@
 
 ## Эндпоинты
 
-1. **VPN-1**: `vpn1.example.com`
-2. **VPN-2**: `vpn2.example.com`
+Адреса серверов, имена tunnel-групп и внутренние подсети в репозитории не хранятся —
+они задаются в `config.toml` (см. `config.example.toml`). В коде и документации всюду
+плейсхолдеры `vpn1.example.com` / `vpn2.example.com`.
 
-Оба — Cisco ASA, AnyConnect SSL/TLS, без SAML/SSO.
+Поддерживаются Cisco ASA и ocserv, AnyConnect SSL/TLS, без SAML/SSO.
 При подключении: выбор группы → логин → пароль → 2FA-код (TOTP), если сервер
 его запросит.
 

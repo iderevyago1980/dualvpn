@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"sslcon/auth"
@@ -11,7 +12,12 @@ import (
 )
 
 func main() {
-	hosts := []string{"vpn1.example.com", "vpn2.example.com"}
+	// Хосты задаются аргументами — адреса реальных эндпоинтов в репозитории не хранятся.
+	hosts := os.Args[1:]
+	if len(hosts) == 0 {
+		fmt.Fprintf(os.Stderr, "использование: %s <vpn-host> [vpn-host...]\n", os.Args[0])
+		os.Exit(2)
+	}
 
 	for _, host := range hosts {
 		fmt.Printf("=== %s ===\n", host)

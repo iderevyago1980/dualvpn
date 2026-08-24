@@ -3,31 +3,22 @@
 ## Цель
 Приложение для Windows, позволяющее одновременно подключаться к двум Cisco AnyConnect VPN эндпоинтам. Два режима работы: TUN (с админ-правами) и SOCKS5 (без админ-прав). UI для конфигурации, выбора группы, ввода 2FA.
 
-## Эндпоинты (реальные, проверенные)
+## Эндпоинты
 
-### 1. VPN-1
-- URL: `vpn1.example.com` (vpn.example.com редиректит на vpn2)
-- Тип: Cisco ASA, AnyConnect SSL/TLS
-- SAML/SSO: НЕТ
-- Группы (tunnel-groups):
-  - `Group-2FA` → отображается как "Group-2FA" (по умолчанию)
-  - `Group-Partners-2FA` → "Group-Partners-2FA"
-  - `Basic` → "VPN-1"
-  - `Group-Partners` → "Partners"
-  - `Group-Ext` → "Group-Ext"
-- 2FA: TOTP (6 цифр) для групп с "2FA" в названии
-- CSRF token в форме логина
+Конкретные адреса, алиасы групп и внутренние зоны в репозитории не фиксируются:
+они задаются пользователем в `config.toml`. Ниже — требования к любому
+поддерживаемому эндпоинту; в примерах плейсхолдеры `vpn1.example.com` /
+`vpn2.example.com`.
 
-### 2. VPN-2
-- URL: `vpn2.example.com`
-- Тип: Cisco ASA, AnyConnect SSL/TLS
-- SAML/SSO: НЕТ
-- Группы:
-  - `RA` → "Remote Access" (по умолчанию)
-  - `RA-MFA` → "Remote Access MFA"
-  - `RA-Full` → "Remote Access Full"
-- 2FA: TOTP для группы RA-MFA
+### Требования к эндпоинту
+- Тип: Cisco ASA или ocserv, AnyConnect SSL/TLS
+- SAML/SSO: не поддерживается
+- Группы (tunnel-groups): список запрашивается у самого сервера при подключении
+  (`dualvpn-harness -groups` или кнопка «↻ с сервера» в UI); в конфиге пишется
+  алиас ровно в том виде, в каком его отдал сервер
+- 2FA: TOTP (6 цифр), если сервер выдал challenge — по имени группы это не угадать
 - CSRF token в форме логина
+- Сервер может ответить редиректом на другой адрес — клиент за ним следует
 
 ## Архитектура
 

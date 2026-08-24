@@ -8,9 +8,8 @@
 ## Подход
 
 1. Найти Go-библиотеку для протокола AnyConnect
-2. Проверить TLS handshake + XML POST auth на реальных серверах:
-   - vpn1.example.com
-   - vpn2.example.com
+2. Проверить TLS handshake + XML POST auth на реальных серверах
+   (адреса передаются аргументами: `go run . <host> [host...]`)
 
 ## Результаты
 
@@ -25,8 +24,8 @@
 
 | Сервер | TLS | Cipher Suite | Время |
 |---|---|---|---|
-| vpn1.example.com | TLS1.2 | 0xc030 (ECDHE-RSA-AES256-GCM-SHA384) | 598ms |
-| vpn2.example.com | TLS1.3 | 0x1302 (TLS_AES_256_GCM_SHA384) | 384ms |
+| эндпоинт A | TLS1.2 | 0xc030 (ECDHE-RSA-AES256-GCM-SHA384) | 598ms |
+| эндпоинт B | TLS1.3 | 0x1302 (TLS_AES_256_GCM_SHA384) | 384ms |
 
 Оба сервера приняли TLS handshake и ответили на XML POST `<config-auth type="init">`.
 
