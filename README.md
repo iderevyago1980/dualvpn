@@ -1,131 +1,130 @@
 # DualVPN
 
-Приложение для одновременного подключения к двум Cisco AnyConnect VPN эндпоинтам.
+An application for connecting to two Cisco AnyConnect VPN endpoints at the same time.
 
-## Архитектура
+## Architecture
 
-- **Язык**: Go
-- **VPN-протокол**: Cisco AnyConnect (SSL/TLS + DTLS) — собственный клиент на Go
-  (форк [sslcon](https://github.com/tlslink/sslcon)); внешний бинарь `openconnect`
-  **не** используется
-- **Два режима**: TUN (нужны админ-права) и SOCKS5 (без админа)
-- **UI**: Wails v2 (Go backend + HTML/CSS/JS frontend, системный трей)
+- **Language**: Go
+- **VPN protocol**: Cisco AnyConnect (SSL/TLS + DTLS) — a native Go client
+  (a fork of [sslcon](https://github.com/tlslink/sslcon)); the external
+  `openconnect` binary is **not** used
+- **Two modes**: TUN (requires administrator rights) and SOCKS5 (no elevation)
+- **UI**: Wails v2 (Go backend + HTML/CSS/JS frontend, system tray)
 
-## Эндпоинты
+## Endpoints
 
-Адреса серверов, имена tunnel-групп и внутренние подсети в репозитории не хранятся —
-они задаются в `config.toml` (см. `config.example.toml`). В коде и документации всюду
-плейсхолдеры `vpn1.example.com` / `vpn2.example.com`.
+Server addresses, tunnel-group names and internal subnets are not stored in this
+repository — you set them in `config.toml` (see `config.example.toml`). The code and
+the documentation use the placeholders `vpn1.example.com` / `vpn2.example.com`
+throughout.
 
-Поддерживаются Cisco ASA и ocserv, AnyConnect SSL/TLS, без SAML/SSO.
-При подключении: выбор группы → логин → пароль → 2FA-код (TOTP), если сервер
-его запросит.
+Cisco ASA and ocserv are supported over AnyConnect SSL/TLS, without SAML/SSO.
+Connecting goes: pick a group → username → password → 2FA code (TOTP) if the server
+asks for one.
 
-Имя группы должно **буквально** совпадать с алиасом на сервере. Список групп
-не зашит в приложение — он запрашивается у самого сервера: кнопка
-«↻ с сервера» рядом с полем группы, либо `dualvpn-harness -groups`. Пустая
-группа означает «использовать группу сервера по умолчанию».
+The group name must match the alias on the server **literally**. The list of groups is
+not baked into the application; it is requested from the server itself — either with the
+"↻ from server" button next to the group field, or with `dualvpn-harness -groups`. An
+empty group means "use the server's default group".
 
-## Режимы работы
+## Modes
 
-### SOCKS5 (без админских прав)
-- gVisor netstack — userspace TCP/IP стек
-- Каждый туннель поднимает локальный SOCKS5-прокси (1080, 1081)
-- Приложения маршрутизируются через прокси вручную
-- Не нужен TUN-драйвер
-- Имена разрешаются DNS-серверами шлюза **внутри туннеля**; зоны из
-  split-DNS не уходят в системный резолвер
+### SOCKS5 (no administrator rights)
+- gVisor netstack — a userspace TCP/IP stack
+- Each tunnel exposes a local SOCKS5 proxy (1080, 1081)
+- Applications are pointed at the proxy manually
+- No TUN driver required
+- Names are resolved by the gateway's DNS servers **inside the tunnel**; split-DNS
+  zones never reach the system resolver
 
-### TUN (с админскими правами)
+### TUN (with administrator rights)
 - wintun.dll (Windows) / /dev/net/tun (Linux)
-- Каждый туннель создаёт свой TUN-адаптер
-- Split-tunneling через route table
-- Прозрачно для всех приложений
+- Each tunnel creates its own TUN adapter
+- Split tunneling through the route table
+- Transparent to every application
 
-### Авто-детекция
-- При запуске проверяет наличие админ-прав
-- Если админ → TUN режим
-- Если нет → SOCKS5 режим
-- Режим можно сменить вручную в UI; смена останавливает все туннели.
-  Автоматического отката TUN→SOCKS5 при ошибке нет
+### Auto-detection
+- On startup the app checks whether it has administrator rights
+- Elevated → TUN mode
+- Not elevated → SOCKS5 mode
+- The mode can be switched by hand in the UI; switching stops all tunnels. There is no
+  automatic TUN→SOCKS5 fallback on error
 
-## Структура проекта
+## Project layout
 
 ```
 dualvpn/
-├── main.go                 # Точка входа (встраивает frontend и config.example.toml)
+├── main.go                 # Entry point (embeds the frontend and config.example.toml)
 ├── go.mod
 ├── internal/
-│   ├── config/             # TOML конфиг, загрузка/сохранение
-│   ├── vpn/                # Менеджер туннелей
-│   │   └── sslcon/         # Клиент AnyConnect: auth, 2FA, CSTP/DTLS
-│   ├── socks5/             # SOCKS5-сервер + gVisor netstack + DNS туннеля
-│   ├── tun/                # TUN-адаптеры (wintun/tun)
-│   ├── routing/            # Маршруты split-tunnel (netsh/route)
-│   ├── mockasa/            # Эмулятор Cisco ASA для тестов
+│   ├── config/             # TOML config, load/save
+│   ├── vpn/                # Tunnel manager
+│   │   └── sslcon/         # AnyConnect client: auth, 2FA, CSTP/DTLS
+│   ├── socks5/             # SOCKS5 server + gVisor netstack + tunnel DNS
+│   ├── tun/                # TUN adapters (wintun/tun)
+│   ├── routing/            # Split-tunnel routes (netsh/route)
+│   ├── mockasa/            # Cisco ASA emulator for tests
 │   └── ui/                 # Wails frontend bindings
 ├── cmd/
-│   ├── dualvpn-harness/    # Headless-драйвер: подключение, DNS, группы
-│   └── dualvpn-tuncheck/   # Самопроверка TUN-пути (нужны админ-права)
+│   ├── dualvpn-harness/    # Headless driver: connection, DNS, groups
+│   └── dualvpn-tuncheck/   # TUN path self-check (requires administrator rights)
 ├── frontend/
-│   ├── index.html          # UI (sidebar layout, тёмная тема)
+│   ├── index.html          # UI (sidebar layout, dark theme)
 │   ├── style.css
 │   └── app.js
-└── config.example.toml     # Шаблон конфигурации (встраивается в бинарь)
+└── config.example.toml     # Configuration template (embedded into the binary)
 ```
 
-`wintun.dll` в репозиторий не коммитится: его скачивает `make wintun`
-(`build/windows/fetch-wintun.sh`) и кладёт рядом с exe — драйвер грузится
-только из каталога программы или System32.
+`wintun.dll` is not committed to the repository: `make wintun`
+(`build/windows/fetch-wintun.sh`) downloads it and places it next to the exe — the
+driver is only loaded from the program directory or System32.
 
-## Сборка и запуск на Windows
+## Building and running on Windows
 
 ```bash
 go build -tags desktop,production -ldflags "-H=windowsgui -s -w" -o bin/DualVPN.exe .
 ```
 
-`wintun.dll` нужен только для TUN-режима; SOCKS5 работает без него и без
-прав администратора.
+`wintun.dll` is only needed for TUN mode; SOCKS5 works without it and without
+administrator rights.
 
-**Smart App Control.** На Windows 11 с включённым Smart App Control
-неподписанные сборки блокируются по репутации файла («заблокирован политикой
-Device Guard»). Для разработки помогает `go run ./cmd/...`, для раздачи
-пользователям нужна подпись сертификатом.
+**Smart App Control.** On Windows 11 with Smart App Control enabled, unsigned builds are
+blocked by file reputation ("blocked by Device Guard policy"). For development
+`go run ./cmd/...` helps; shipping to users requires a signing certificate.
 
-### Подпись сборок
+### Signing builds
 
 ```powershell
-build\windows\sign.ps1 -CreateSelfSigned -ExportCer bin\DualVPN-selfsigned.cer  # первый раз
-build\windows\sign.ps1 -Thumbprint <отпечаток>                                  # дальше
+build\windows\sign.ps1 -CreateSelfSigned -ExportCer bin\DualVPN-selfsigned.cer  # first time
+build\windows\sign.ps1 -Thumbprint <thumbprint>                                 # afterwards
 ```
 
-signtool.exe из Windows SDK не нужен — подписывает встроенная
-`Set-AuthenticodeSignature`. Метка времени ставится всегда: без неё подпись
-перестаёт считаться действительной в день истечения сертификата.
+signtool.exe from the Windows SDK is not needed — the built-in
+`Set-AuthenticodeSignature` does the signing. A timestamp is always applied: without one
+the signature stops being considered valid the day the certificate expires.
 
-Релизы подписаны **самоподписанным** сертификатом
-(`CN=DualVPN (self-signed)`, отпечаток
-`A97246B76B693EADE8DA3B99193C37F680FB53CB`). Windows не знает этот корень,
-поэтому подпись считается действительной только там, где сертификат
-установлен вручную:
+Releases are signed with a **self-signed** certificate
+(`CN=DualVPN (self-signed)`, thumbprint
+`A97246B76B693EADE8DA3B99193C37F680FB53CB`). Windows does not know this root, so the
+signature only counts as valid where the certificate has been installed by hand:
 
 ```powershell
 Import-Certificate -FilePath .\DualVPN-selfsigned.cer -CertStoreLocation Cert:\CurrentUser\Root
 Import-Certificate -FilePath .\DualVPN-selfsigned.cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
 ```
 
-Это осмысленно для развёртывания внутри организации (в т.ч. через GPO) и
-бесполезно для публичной раздачи: Smart App Control и SmartScreen смотрят на
-репутацию издателя, а не на факт наличия подписи, и блокируют файл даже с
-формально действительной подписью. Чтобы предупреждения исчезли у
-посторонних, нужен коммерческий OV/EV-сертификат (с 2023 — только с
-аппаратным токеном или облачным HSM) либо Azure Trusted Signing.
+That makes sense for deployment inside an organization (including via GPO) and is
+useless for public distribution: Smart App Control and SmartScreen look at publisher
+reputation rather than at the mere presence of a signature, and will block the file even
+with a formally valid one. To get rid of the warnings for outside users you need a
+commercial OV/EV certificate (since 2023 — only with a hardware token or a cloud HSM),
+or Azure Trusted Signing.
 
-## Диагностика без GUI
+## Diagnostics without the GUI
 
 ```bash
-go run ./cmd/dualvpn-harness -config config.toml -groups                 # какие группы предлагает сервер
-go run ./cmd/dualvpn-harness -config config.toml -otp 123456 -hold 30s   # поднять туннели и подержать
-go run ./cmd/dualvpn-harness -config config.toml -resolve host.corp.example   # проверить DNS внутри туннеля
-go build -o bin/dualvpn-tuncheck.exe ./cmd/dualvpn-tuncheck              # TUN: адаптер + маршруты (от админа)
+go run ./cmd/dualvpn-harness -config config.toml -groups                 # which groups the server offers
+go run ./cmd/dualvpn-harness -config config.toml -otp 123456 -hold 30s   # bring tunnels up and hold them
+go run ./cmd/dualvpn-harness -config config.toml -resolve host.corp.example   # check DNS inside the tunnel
+go build -o bin/dualvpn-tuncheck.exe ./cmd/dualvpn-tuncheck              # TUN: adapter + routes (as admin)
 ```
